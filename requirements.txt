@@ -1,0 +1,5 @@
+# 仅两个依赖：
+# - openai：DeepSeek 官方推荐的 API 客户端库（只用于原始 HTTP 调用 + JSON 反序列化）
+# - python-dotenv：读取本地 .env 文件中的凭据（.env 已加入 .gitignore，不入库）
+openai>=1.40.0
+python-dotenv>=1.0.0
