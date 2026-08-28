@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import json
+
 from .config import Config
 from .history import ConversationHistory
 from .llm import LLMClient
@@ -32,6 +34,14 @@ SYSTEM_PROMPT = """你是一个编程智能体（coding agent），运行在用�
 - 修改文件前先用 read_file 确认原文，保证 edit_file 的 old_string 精确。
 """
 
+SUMMARY_PROMPT = """你是对话压缩助手。请把下面这段「agent 与工具的交互历史」压缩成一段简洁的中文摘要，用于替换原文以节省上下文。
+
+要求：
+- 保留：用户任务目标、已执行的关键操作与命令、重要结论/错误、尚未完成的待办。
+- 省略：重复尝试、工具返回的冗长原文、过程性细节。
+- 直接输出一段连贯的摘要文字，不要加标题或序号。
+"""
+
 
 class AgentResult:
     def __init__(self, answer: str, iterations: int, tool_calls: int):
@@ -47,6 +57,15 @@ class CodingAgent:
         self.tools = build_toolbox(config)
         self.history = ConversationHistory(SYSTEM_PROMPT, config.context_budget_tokens)
 
+    def _summarize(self, messages: list[dict]) -> str:
+        """把一段历史轮次压缩成摘要（调用模型，不带工具）。"""
+        prompt = [
+            {"role": "system", "content": SUMMARY_PROMPT},
+            {"role": "user", "content": json.dumps(messages, ensure_ascii=False)},
+        ]
+        resp = self.llm.chat(prompt, tools=[])
+        return resp.content or "（无内容）"
+
     def run(self, task: str, on_text=None) -> AgentResult:
         """执行一个编程任务，返回最终结果。
 
@@ -57,7 +76,7 @@ class CodingAgent:
         total_tool_calls = 0
 
         for iteration in range(1, self.config.max_iterations + 1):
-            messages = self.history.build()
+            messages = self.history.build(summarizer=self._summarize)
             if on_text is not None:
                 response = self.llm.chat_stream(messages, self.tools.schemas(), on_text=on_text)
             else:

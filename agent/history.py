@@ -27,6 +27,7 @@ class ConversationHistory:
         self.system_prompt = system_prompt
         self.budget_tokens = budget_tokens
         self.messages: list[dict] = []
+        self.summaries: list[str] = []
 
     # —— 增 ——
 
@@ -65,24 +66,44 @@ class ConversationHistory:
 
     # —— 组装 ——
 
-    def build(self) -> list[dict]:
-        """返回发给模型的消息列表，并就地裁剪超预算的历史。"""
-        self._trim_if_needed()
-        return [{"role": "system", "content": self.system_prompt}] + self.messages
+    def build(self, summarizer=None) -> list[dict]:
+        """返回发给模型的消息列表，并就地压缩/裁剪超预算的历史。
+
+        summarizer：可选，签名 (list[dict]) -> str，用于把将被裁剪的最早轮次
+        先总结成摘要再丢弃；为 None 时退化为「直接丢弃」。压缩得到的摘要统一
+        插在 system 之后，独立保存、不会被再次裁剪。
+        """
+        self._trim_if_needed(summarizer)
+        result = [{"role": "system", "content": self.system_prompt}]
+        if self.summaries:
+            result.append(
+                {"role": "user", "content": "[前面对话摘要]\n" + "\n\n".join(self.summaries)}
+            )
+        return result + self.messages
 
     # —— 内部 ——
 
-    def _trim_if_needed(self) -> None:
-        """超出预算时，从第二条 user 消息开始删除最早的完整轮次。"""
+    def _trim_if_needed(self, summarizer=None) -> None:
+        """超出预算时，从第二条 user 消息开始压缩最早的完整轮次。
+
+        提供 summarizer 时先「总结再裁剪」以保留关键信息；总结失败则退回
+        「直接丢弃」。摘要累积到独立列表，messages 只删不插，保证循环必然终止。
+        """
         while self._total_tokens() > self.budget_tokens:
             second_user_idx = self._find_next_user_idx(start=1)
             if second_user_idx is None:
-                # 只有一个 user 任务且已超预算：无法安全裁剪（会拆散工具对），
+                # 只剩首条 user 任务且已超预算：无法安全裁剪（会拆散工具对），
                 # 交由 max_iterations 兜底，防止无限增长。
                 break
             third_user_idx = self._find_next_user_idx(start=second_user_idx + 1)
             end = third_user_idx if third_user_idx is not None else len(self.messages)
+            old_round = self.messages[second_user_idx:end]
             del self.messages[second_user_idx:end]
+            if summarizer is not None:
+                try:
+                    self.summaries.append(summarizer(old_round))
+                except Exception:  # noqa: BLE001 —— 总结失败退回直接丢弃
+                    pass
 
     def _find_next_user_idx(self, start: int) -> int | None:
         for i in range(start, len(self.messages)):
@@ -92,6 +113,8 @@ class ConversationHistory:
 
     def _total_tokens(self) -> int:
         total = estimate_tokens(self.system_prompt)
+        for summary in self.summaries:
+            total += estimate_tokens(summary)
         for msg in self.messages:
             total += estimate_tokens(json.dumps(msg, ensure_ascii=False))
         return total
