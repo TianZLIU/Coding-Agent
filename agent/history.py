@@ -118,3 +118,35 @@ class ConversationHistory:
         for msg in self.messages:
             total += estimate_tokens(json.dumps(msg, ensure_ascii=False))
         return total
+
+    # —— 持久化 ——
+
+    def to_dict(self) -> dict:
+        """把完整会话状态导出为可 JSON 序列化的字典。"""
+        return {
+            "version": 1,
+            "system_prompt": self.system_prompt,
+            "budget_tokens": self.budget_tokens,
+            "summaries": self.summaries,
+            "messages": self.messages,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ConversationHistory":
+        """从 to_dict 的结果重建会话。"""
+        obj = cls(data["system_prompt"], data["budget_tokens"])
+        obj.summaries = list(data.get("summaries", []))
+        obj.messages = list(data.get("messages", []))
+        return obj
+
+    def save(self, path: str) -> None:
+        """将会话保存为 UTF-8 JSON 文件。"""
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def load(cls, path: str) -> "ConversationHistory":
+        """从 save 生成的 JSON 文件恢复会话。"""
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return cls.from_dict(data)

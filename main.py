@@ -1,11 +1,19 @@
 """命令行入口。
 
-两种用法：
-1. 交互式 REPL：  python main.py
-2. 单任务模式：  python main.py "用 Python 写一个快速排序并测试"
+用法：
+  python main.py "用 Python 写一个快速排序并测试"   # 单任务模式
+  python main.py                                    # 交互式 REPL
+  python main.py --save session.json ...            # 结束后保存会话
+  python main.py --resume session.json ...          # 启动时恢复会话（跨进程续聊）
+
+REPL 内命令：
+  /save [路径]   保存会话（缺省用 --save 指定的路径或 session.json）
+  /load <路径>   从文件恢复会话
+  /exit          退出
 """
 from __future__ import annotations
 
+import argparse
 import sys
 
 from agent.agent import CodingAgent
@@ -16,6 +24,8 @@ from agent.config import Config
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
+
+DEFAULT_SESSION = "session.json"
 
 
 class _StreamPrinter:
@@ -35,18 +45,25 @@ class _StreamPrinter:
             sys.stdout.flush()
 
 
-def _build_agent() -> CodingAgent:
+def _build_agent(resume_path: str | None = None) -> CodingAgent:
     config = Config()
     try:
         config.validate()
     except RuntimeError as exc:
         print(f"[配置错误] {exc}", file=sys.stderr)
         sys.exit(1)
-    return CodingAgent(config)
+    agent = CodingAgent(config)
+    if resume_path:
+        try:
+            agent.load_session(resume_path)
+            print(f"[已从 {resume_path} 恢复会话]")
+        except (FileNotFoundError, ValueError):
+            print(f"[警告] 会话文件 {resume_path} 不存在或格式错误，将全新开始", file=sys.stderr)
+    return agent
 
 
-def run_one_shot(task: str) -> None:
-    agent = _build_agent()
+def run_one_shot(task: str, save_path: str | None = None, resume_path: str | None = None) -> None:
+    agent = _build_agent(resume_path)
     print(f"任务：{task}\n")
     print("agent 工作中……\n")
     printer = _StreamPrinter()
@@ -56,13 +73,16 @@ def run_one_shot(task: str) -> None:
     else:
         print(result.answer)  # 兜底：无流式内容（如空回答）时整段打印
     print(f"\n[完成：{result.iterations} 轮，{result.tool_calls} 次工具调用]")
+    if save_path:
+        agent.save_session(save_path)
+        print(f"[会话已保存到 {save_path}]")
 
 
-def run_repl() -> None:
-    agent = _build_agent()
+def run_repl(save_path: str | None = None, resume_path: str | None = None) -> None:
+    agent = _build_agent(resume_path)
     print(f"coding-agent 已就绪（模型 {agent.config.model}）")
     print(f"工作目录：{agent.config.working_dir}")
-    print("输入你的编程任务后回车开始；输入 /exit 退出。\n")
+    print("输入编程任务后回车开始；/save [路径] 保存，/load <路径> 恢复，/exit 退出。\n")
 
     while True:
         try:
@@ -72,8 +92,26 @@ def run_repl() -> None:
             break
         if not task:
             continue
-        if task.lower() in {"/exit", "/quit"}:
+
+        lowered = task.lower()
+        if lowered in {"/exit", "/quit"}:
             break
+        if lowered.startswith("/save"):
+            path = task[len("/save"):].strip() or save_path or DEFAULT_SESSION
+            agent.save_session(path)
+            print(f"[会话已保存到 {path}]\n")
+            continue
+        if lowered.startswith("/load"):
+            path = task[len("/load"):].strip()
+            if not path:
+                print("[用法] /load <路径>")
+                continue
+            try:
+                agent.load_session(path)
+                print(f"[已从 {path} 恢复会话]\n")
+            except (FileNotFoundError, ValueError):
+                print(f"[警告] 会话文件 {path} 不存在或格式错误\n")
+            continue
 
         print("agent 工作中……\n")
         printer = _StreamPrinter()
@@ -88,9 +126,22 @@ def run_repl() -> None:
             print(result.answer)  # 兜底：无流式内容时整段打印
         print(f"\n[完成：{result.iterations} 轮，{result.tool_calls} 次工具调用]\n")
 
+    if save_path:
+        agent.save_session(save_path)
+        print(f"[会话已保存到 {save_path}]")
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="coding-agent：一个自研的编程智能体")
+    parser.add_argument("task", nargs="*", help="单任务模式下要执行的任务描述")
+    parser.add_argument("--save", metavar="PATH", help="运行结束后将会话历史保存到指定文件")
+    parser.add_argument("--resume", metavar="PATH", help="启动时从指定文件恢复会话历史（跨进程续聊）")
+    return parser.parse_args()
+
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        run_one_shot(" ".join(sys.argv[1:]))
+    args = _parse_args()
+    if args.task:
+        run_one_shot(" ".join(args.task), save_path=args.save, resume_path=args.resume)
     else:
-        run_repl()
+        run_repl(save_path=args.save, resume_path=args.resume)

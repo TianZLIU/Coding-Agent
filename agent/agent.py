@@ -109,3 +109,11 @@ class CodingAgent:
         )
         self.history.add_assistant_text(fallback)
         return AgentResult(fallback, self.config.max_iterations, total_tool_calls)
+
+    def save_session(self, path: str) -> None:
+        """把当前会话历史保存到本地 JSON 文件，便于跨进程续聊。"""
+        self.history.save(path)
+
+    def load_session(self, path: str) -> None:
+        """从本地 JSON 文件恢复会话历史（覆盖当前内存中的历史）。"""
+        self.history = ConversationHistory.load(path)
