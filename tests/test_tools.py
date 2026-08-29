@@ -69,6 +69,12 @@ class FileToolsTest(unittest.TestCase):
         self.assertIn("x.py", out)
         self.assertNotIn("y.txt", out)
 
+    def test_path_escape_is_rejected(self):
+        """越出 working_dir 的绝对路径应被拒绝（sandbox 化）。"""
+        outside = os.path.join(os.path.dirname(self.wd), "outside.txt")
+        with self.assertRaises(ValueError):
+            self._call("read_file", {"path": outside})
+
 
 class ShellToolTest(unittest.TestCase):
     def setUp(self):

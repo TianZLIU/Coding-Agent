@@ -12,11 +12,19 @@ from .base import Tool
 
 
 def _resolve(working_dir: str, raw_path: str) -> Path:
-    """把用户/模型给的路径解析为绝对路径（相对路径基于 working_dir）。"""
+    """把用户/模型给的路径解析为绝对路径，并限制在 working_dir 内（sandbox 化）。
+
+    相对路径基于 working_dir；绝对路径若越出 working_dir 则抛 ValueError，
+    由上层 Toolbox 捕获后转成错误回传模型，防止 agent 读写工作目录之外的文件。
+    """
+    base = Path(working_dir).resolve()
     p = Path(raw_path)
     if not p.is_absolute():
-        p = Path(working_dir) / p
-    return p.resolve()
+        p = base / p
+    p = p.resolve()
+    if p != base and base not in p.parents:
+        raise ValueError(f"路径越界：{p} 不在工作目录 {base} 内")
+    return p
 
 
 def _truncate(text: str, limit: int) -> str:
