@@ -1,5 +1,7 @@
 # coding-agent
 
+[![CI](https://github.com/TianZLIU/Coding-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/TianZLIU/Coding-Agent/actions/workflows/ci.yml)
+
 一个自研的编程智能体（coding agent）：通过与大语言模型交互，自主读写文件、执行命令，完成编程任务——类似一个简化的 Claude Code / Codex / OpenCode。
 
 > 软件工程专业项目。独立设计实现，不依赖任何 agent 框架 / SDK。
