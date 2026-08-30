@@ -11,12 +11,14 @@
 from __future__ import annotations
 
 import json
+import time
 
 from .config import Config
 from .history import ConversationHistory
 from .llm import LLMClient
 from .parser import ParseError, parse_tool_arguments
 from .tools import build_toolbox
+from .trace import Tracer
 
 SYSTEM_PROMPT = """你是一个编程智能体（coding agent），运行在用户的本地机器上。
 你的任务是通过读写文件、执行命令，自主完成用户交给你的编程任务。
@@ -51,11 +53,12 @@ class AgentResult:
 
 
 class CodingAgent:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, verbose: bool = False):
         self.config = config
         self.llm = LLMClient(config)
         self.tools = build_toolbox(config)
         self.history = ConversationHistory(SYSTEM_PROMPT, config.context_budget_tokens)
+        self.tracer = Tracer(verbose)
 
     def _summarize(self, messages: list[dict]) -> str:
         """把一段历史轮次压缩成摘要（调用模型，不带工具）。"""
@@ -64,7 +67,9 @@ class CodingAgent:
             {"role": "user", "content": json.dumps(messages, ensure_ascii=False)},
         ]
         resp = self.llm.chat(prompt, tools=[])
-        return resp.content or "（无内容）"
+        summary = resp.content or "（无内容）"
+        self.tracer.summarized(summary)
+        return summary
 
     def run(self, task: str, on_text=None) -> AgentResult:
         """执行一个编程任务，返回最终结果。
@@ -77,16 +82,21 @@ class CodingAgent:
 
         for iteration in range(1, self.config.max_iterations + 1):
             messages = self.history.build(summarizer=self._summarize)
+            self.tracer.round_start(iteration, self.history.token_count())
+
+            started = time.perf_counter()
             if on_text is not None:
                 response = self.llm.chat_stream(messages, self.tools.schemas(), on_text=on_text)
             else:
                 response = self.llm.chat(messages, self.tools.schemas())
+            self.tracer.model_elapsed(time.perf_counter() - started)
 
             if response.wants_tool_call:
                 # 记录 assistant 的工具调用请求
                 self.history.add_assistant_tool_call(response.tool_calls)
                 # 逐个本地执行工具，并把结果回填
                 for tc in response.tool_calls:
+                    started = time.perf_counter()
                     try:
                         args = parse_tool_arguments(tc["arguments"])
                     except ParseError as exc:
@@ -95,11 +105,13 @@ class CodingAgent:
                         result = self.tools.execute(tc["name"], args)
                     total_tool_calls += 1
                     self.history.add_tool_result(tc["id"], tc["name"], result)
+                    self.tracer.tool_done(tc["name"], time.perf_counter() - started, result)
                 continue
 
             # 无工具调用 → 模型给出最终回答，终止
             answer = response.content or "(模型返回了空回答)"
             self.history.add_assistant_text(answer)
+            self.tracer.final(iteration, total_tool_calls)
             return AgentResult(answer, iteration, total_tool_calls)
 
         # 达到最大轮数仍无最终回答：强制终止
@@ -108,6 +120,7 @@ class CodingAgent:
             f"本次共执行 {total_tool_calls} 次工具调用。"
         )
         self.history.add_assistant_text(fallback)
+        self.tracer.final(self.config.max_iterations, total_tool_calls)
         return AgentResult(fallback, self.config.max_iterations, total_tool_calls)
 
     def save_session(self, path: str) -> None:

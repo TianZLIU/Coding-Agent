@@ -81,6 +81,10 @@ class ConversationHistory:
             )
         return result + self.messages
 
+    def token_count(self) -> int:
+        """当前历史（含 system、摘要、消息）的估算 token 数，供 --verbose 追踪显示。"""
+        return self._total_tokens()
+
     # —— 内部 ——
 
     def _trim_if_needed(self, summarizer=None) -> None:

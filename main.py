@@ -5,6 +5,7 @@
   python main.py                                    # 交互式 REPL
   python main.py --save session.json ...            # 结束后保存会话
   python main.py --resume session.json ...          # 启动时恢复会话（跨进程续聊）
+  python main.py --verbose "任务"                    # 打印执行追踪（token/工具/耗时）
 
 REPL 内命令：
   /save [路径]   保存会话（缺省用 --save 指定的路径或 session.json）
@@ -45,14 +46,14 @@ class _StreamPrinter:
             sys.stdout.flush()
 
 
-def _build_agent(resume_path: str | None = None) -> CodingAgent:
+def _build_agent(resume_path: str | None = None, verbose: bool = False) -> CodingAgent:
     config = Config()
     try:
         config.validate()
     except RuntimeError as exc:
         print(f"[配置错误] {exc}", file=sys.stderr)
         sys.exit(1)
-    agent = CodingAgent(config)
+    agent = CodingAgent(config, verbose=verbose)
     if resume_path:
         try:
             agent.load_session(resume_path)
@@ -62,8 +63,8 @@ def _build_agent(resume_path: str | None = None) -> CodingAgent:
     return agent
 
 
-def run_one_shot(task: str, save_path: str | None = None, resume_path: str | None = None) -> None:
-    agent = _build_agent(resume_path)
+def run_one_shot(task: str, save_path: str | None = None, resume_path: str | None = None, verbose: bool = False) -> None:
+    agent = _build_agent(resume_path, verbose)
     print(f"任务：{task}\n")
     print("agent 工作中……\n")
     printer = _StreamPrinter()
@@ -78,8 +79,8 @@ def run_one_shot(task: str, save_path: str | None = None, resume_path: str | Non
         print(f"[会话已保存到 {save_path}]")
 
 
-def run_repl(save_path: str | None = None, resume_path: str | None = None) -> None:
-    agent = _build_agent(resume_path)
+def run_repl(save_path: str | None = None, resume_path: str | None = None, verbose: bool = False) -> None:
+    agent = _build_agent(resume_path, verbose)
     print(f"coding-agent 已就绪（模型 {agent.config.model}）")
     print(f"工作目录：{agent.config.working_dir}")
     print("输入编程任务后回车开始；/save [路径] 保存，/load <路径> 恢复，/exit 退出。\n")
@@ -136,12 +137,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("task", nargs="*", help="单任务模式下要执行的任务描述")
     parser.add_argument("--save", metavar="PATH", help="运行结束后将会话历史保存到指定文件")
     parser.add_argument("--resume", metavar="PATH", help="启动时从指定文件恢复会话历史（跨进程续聊）")
+    parser.add_argument("--verbose", action="store_true", help="打印执行追踪（每轮 token、工具调用与耗时）")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
     if args.task:
-        run_one_shot(" ".join(args.task), save_path=args.save, resume_path=args.resume)
+        run_one_shot(" ".join(args.task), save_path=args.save, resume_path=args.resume, verbose=args.verbose)
     else:
-        run_repl(save_path=args.save, resume_path=args.resume)
+        run_repl(save_path=args.save, resume_path=args.resume, verbose=args.verbose)
