@@ -23,6 +23,14 @@ class TracerTest(unittest.TestCase):
         self.assertIn("[trace]", out)
         self.assertIn("100", out)
 
+    def test_sink_receives_structured_event(self):
+        events = []
+        Tracer(enabled=False, sink=events.append).tool_done("list_dir", 0.1, "ok")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "tool_call")
+        self.assertEqual(events[0]["name"], "list_dir")
+        self.assertEqual(events[0]["result"], "ok")
+
 
 if __name__ == "__main__":
     unittest.main()
