@@ -162,7 +162,15 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# 欢迎语 + 示例任务（无历史时显示，避免初始页面空白）
+# 处理新输入（输入框固定在页面底部；示例按钮通过 pending_prompt 触发）
+prompt = st.chat_input("输入编程任务，例如：写一个快速排序并测试它")
+pending = st.session_state.pop("pending_prompt", None)
+if prompt:
+    _run_task(prompt)
+elif pending is not None:
+    _run_task(pending)
+
+# 欢迎语 + 示例任务（处理完输入后仍无历史时才显示，避免首次输入后残留）
 if not st.session_state.messages:
     st.markdown("##### 试试这些任务，或直接在下方输入：")
     examples = [
@@ -173,8 +181,5 @@ if not st.session_state.messages:
     cols = st.columns(len(examples))
     for col, ex in zip(cols, examples):
         if col.button(ex, use_container_width=True, key=f"example_{ex}"):
-            _run_task(ex)
-
-# 输入框（固定在页面底部）
-if prompt := st.chat_input("输入编程任务，例如：写一个快速排序并测试它"):
-    _run_task(prompt)
+            st.session_state.pending_prompt = ex
+            st.rerun()
