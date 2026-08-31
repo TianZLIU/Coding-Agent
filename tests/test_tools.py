@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from agent.tools.files import make_file_tools
-from agent.tools.shell import make_shell_tool
+from agent.tools.shell import _outside_path, make_shell_tool
 
 
 class FileToolsTest(unittest.TestCase):
@@ -98,6 +98,38 @@ class ShellToolTest(unittest.TestCase):
     def test_allow_dangerous_bypasses_interception(self):
         out = self._call({"command": "rm -rf __nonexistent_dir_123__", "allow_dangerous": True})
         self.assertNotIn("已拦截", out)
+
+    def test_command_with_outside_path_is_intercepted(self):
+        out = self._call({"command": "cat ../outside.txt"})
+        self.assertIn("已拦截", out)
+
+
+class PathGuardTest(unittest.TestCase):
+    """shell 层路径越界防护：_outside_path 纯函数。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.wd = self._tmp.name
+
+    def test_absolute_path_outside_detected(self):
+        self.assertIsNotNone(_outside_path(self.wd, "cat /etc/passwd"))
+
+    def test_parent_dir_detected(self):
+        self.assertIsNotNone(_outside_path(self.wd, "cat ../secret.txt"))
+
+    def test_home_dir_detected(self):
+        self.assertIsNotNone(_outside_path(self.wd, "cat ~/.ssh/id_rsa"))
+
+    def test_url_not_detected(self):
+        self.assertIsNone(_outside_path(self.wd, "git clone https://github.com/x/y.git"))
+
+    def test_relative_path_not_detected(self):
+        self.assertIsNone(_outside_path(self.wd, "python script.py"))
+
+    def test_inside_absolute_path_ok(self):
+        inside = os.path.join(self.wd, "ok.txt")
+        self.assertIsNone(_outside_path(self.wd, f"cat {inside}"))
 
 
 if __name__ == "__main__":

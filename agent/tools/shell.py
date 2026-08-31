@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 
 from .base import Tool
 
@@ -18,6 +19,33 @@ DANGEROUS_PATTERNS: list[tuple[str, str]] = [
     (r"\bgit\s+(push\s+--force|reset\s+--hard)\b", "git 强制改写历史"),
     (r">\s*/dev/(sd[a-z]*|hd[a-z]*|nvme\w*)", "覆盖磁盘设备"),
 ]
+
+# 命令里「越界路径引用」的检测模式：绝对路径、家目录、显式父目录引用。
+# 这些会突破 working_dir 边界，与文件工具层的 sandbox 语义保持一致。
+_PATH_PATTERNS = [
+    re.compile(r'(?<![\w])[A-Za-z]:[\\/][^\s"\']*'),           # Windows 盘符 C:\...（排除 URL 里的 s://）
+    re.compile(r'(?<![:/\w])/(?:[^\s"\']*/)*[^\s"\']*'),        # Unix 绝对路径 /etc/...（排除 URL 里的 /）
+    re.compile(r'~(/[^\s"\']*)?'),                              # 家目录 ~ 或 ~/...
+    re.compile(r'(?<![\w.])\.\.(?![\w.])(?:[\\/][^\s"\']+)?'),  # 父目录 .. 或 ../...
+]
+
+
+def _outside_path(working_dir: str, command: str) -> str | None:
+    """返回命令里第一个越出 working_dir 的路径引用；没有则返回 None。
+
+    与 files._resolve 用同一套「绝对化后再判断是否在工作目录内」的语义，
+    使命令执行层与文件读写层对「越界」的判定保持一致。
+    """
+    base = Path(working_dir).resolve()
+    for pattern in _PATH_PATTERNS:
+        for raw in pattern.findall(command):
+            p = Path(raw).expanduser()
+            if not p.is_absolute():
+                p = base / p
+            p = p.resolve()
+            if p != base and base not in p.parents:
+                return raw
+    return None
 
 
 def make_shell_tool(working_dir: str, max_output_chars: int) -> Tool:
@@ -33,6 +61,13 @@ def make_shell_tool(working_dir: str, max_output_chars: int) -> Tool:
                         "为避免不可逆后果，默认拒绝执行；若确需执行，请把 allow_dangerous 设为 true 后重新调用。"
                     )
                 break
+        if not allow_dangerous:
+            outside = _outside_path(working_dir, command)
+            if outside is not None:
+                return (
+                    f"已拦截：命令引用了工作目录之外的路径「{outside}」。"
+                    "为避免越界读写，默认拒绝执行；若确需访问，请把 allow_dangerous 设为 true 后重新调用。"
+                )
         try:
             proc = subprocess.run(
                 command,
