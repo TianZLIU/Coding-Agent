@@ -24,6 +24,10 @@ class Config:
     model: str = field(default_factory=lambda: os.getenv("DEEPSEEK_MODEL", "deepseek-chat"))
     temperature: float = 0.2
 
+    # —— 成本计价（deepseek-chat，元 / 百万 token）——
+    price_input_per_million: float = 1.0   # 输入（按缓存未命中价，保守上界）
+    price_output_per_million: float = 2.0  # 输出
+
     # —— agent 行为 ——
     max_iterations: int = 30          # 最大工具循环轮数（终止条件之一）
     context_budget_tokens: int = 56000  # 上下文 token 预算，超出后裁剪历史

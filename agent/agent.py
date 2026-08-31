@@ -46,10 +46,11 @@ SUMMARY_PROMPT = """你是对话压缩助手。请把下面这段「agent 与工
 
 
 class AgentResult:
-    def __init__(self, answer: str, iterations: int, tool_calls: int):
+    def __init__(self, answer: str, iterations: int, tool_calls: int, cost=None):
         self.answer = answer
         self.iterations = iterations
         self.tool_calls = tool_calls
+        self.cost = cost  # CostStats，含本次任务的真实 token 与耗时
 
 
 class CodingAgent:
@@ -105,14 +106,16 @@ class CodingAgent:
                         result = self.tools.execute(tc["name"], args)
                     total_tool_calls += 1
                     self.history.add_tool_result(tc["id"], tc["name"], result)
-                    self.tracer.tool_done(tc["name"], time.perf_counter() - started, result)
+                    elapsed = time.perf_counter() - started
+                    self.llm.cost.tool_seconds += elapsed
+                    self.tracer.tool_done(tc["name"], elapsed, result)
                 continue
 
             # 无工具调用 → 模型给出最终回答，终止
             answer = response.content or "(模型返回了空回答)"
             self.history.add_assistant_text(answer)
             self.tracer.final(iteration, total_tool_calls)
-            return AgentResult(answer, iteration, total_tool_calls)
+            return AgentResult(answer, iteration, total_tool_calls, self.llm.cost)
 
         # 达到最大轮数仍无最终回答：强制终止
         fallback = (
@@ -121,7 +124,7 @@ class CodingAgent:
         )
         self.history.add_assistant_text(fallback)
         self.tracer.final(self.config.max_iterations, total_tool_calls)
-        return AgentResult(fallback, self.config.max_iterations, total_tool_calls)
+        return AgentResult(fallback, self.config.max_iterations, total_tool_calls, self.llm.cost)
 
     def save_session(self, path: str) -> None:
         """把当前会话历史保存到本地 JSON 文件，便于跨进程续聊。"""

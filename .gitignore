@@ -23,3 +23,4 @@ Thumbs.db
 # 会话持久化文件（可能含对话历史 / 文件内容，不入库）
 session.json
 *.session.json
+.web_session.json

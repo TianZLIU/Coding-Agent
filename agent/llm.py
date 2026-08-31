@@ -11,14 +11,21 @@ from typing import Any
 from openai import OpenAI
 
 from .config import Config
+from .usage import CostStats
 
 
 class ChatResponse:
     """归一化后的模型返回结果：要么是文本回答，要么是工具调用。"""
 
-    def __init__(self, content: str | None, tool_calls: list[dict] | None):
+    def __init__(
+        self,
+        content: str | None,
+        tool_calls: list[dict] | None,
+        usage: dict | None = None,
+    ):
         self.content = content or ""
         self.tool_calls = tool_calls or []
+        self.usage = usage  # {"prompt_tokens": int, "completion_tokens": int} 或 None
 
     @property
     def wants_tool_call(self) -> bool:
@@ -30,6 +37,7 @@ class LLMClient:
     def __init__(self, config: Config):
         self.config = config
         self.client = OpenAI(api_key=config.api_key, base_url=config.base_url)
+        self.cost = CostStats()  # 累计本次会话的真实 token 与模型耗时
 
     def chat(self, messages: list[dict], tools: list[dict]) -> ChatResponse:
         """调用模型，带指数退避重试（应对限流/瞬时网络错误）。"""
@@ -44,8 +52,12 @@ class LLMClient:
         last_exc: Exception | None = None
         for attempt in range(3):
             try:
+                started = time.perf_counter()
                 resp = self.client.chat.completions.create(**kwargs)
-                return self._parse(resp)
+                self.cost.model_seconds += time.perf_counter() - started
+                parsed = self._parse(resp)
+                self.cost.add_usage(parsed.usage)
+                return parsed
             except Exception as exc:  # noqa: BLE001 —— 统一做重试处理
                 last_exc = exc
                 time.sleep(2 ** attempt)
@@ -63,6 +75,8 @@ class LLMClient:
             "messages": messages,
             "temperature": self.config.temperature,
             "stream": True,
+            # 让流式响应在最后一个 chunk 携带 usage，以计量真实 token
+            "stream_options": {"include_usage": True},
         }
         if tools:
             kwargs["tools"] = tools
@@ -70,8 +84,12 @@ class LLMClient:
         last_exc: Exception | None = None
         for attempt in range(3):
             try:
+                started = time.perf_counter()
                 stream = self.client.chat.completions.create(**kwargs)
-                return self._collect_stream(stream, on_text)
+                parsed = self._collect_stream(stream, on_text)
+                self.cost.model_seconds += time.perf_counter() - started
+                self.cost.add_usage(parsed.usage)
+                return parsed
             except Exception as exc:  # noqa: BLE001 —— 统一做重试处理
                 last_exc = exc
                 time.sleep(2 ** attempt)
@@ -83,8 +101,12 @@ class LLMClient:
         """聚合流式增量：文本按序拼接并实时回调，工具调用按 index 累积参数。"""
         content_parts: list[str] = []
         tool_calls: dict[int, dict[str, Any]] = {}
+        last_usage = None
 
         for chunk in stream:
+            u = getattr(chunk, "usage", None)
+            if u is not None:
+                last_usage = u
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -113,7 +135,13 @@ class LLMClient:
             }
             for i in sorted(tool_calls)
         ]
-        return ChatResponse("".join(content_parts), assembled)
+        usage = None
+        if last_usage is not None:
+            usage = {
+                "prompt_tokens": getattr(last_usage, "prompt_tokens", 0) or 0,
+                "completion_tokens": getattr(last_usage, "completion_tokens", 0) or 0,
+            }
+        return ChatResponse("".join(content_parts), assembled, usage)
 
     @staticmethod
     def _parse(resp) -> ChatResponse:
@@ -132,4 +160,11 @@ class LLMClient:
                 }
                 for tc in choice.tool_calls
             ]
-        return ChatResponse(choice.content, tool_calls)
+        usage = None
+        u = getattr(resp, "usage", None)
+        if u is not None:
+            usage = {
+                "prompt_tokens": getattr(u, "prompt_tokens", 0) or 0,
+                "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
+            }
+        return ChatResponse(choice.content, tool_calls, usage)

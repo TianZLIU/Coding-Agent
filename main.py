@@ -19,6 +19,7 @@ import sys
 
 from agent.agent import CodingAgent
 from agent.config import Config
+from agent.usage import format_cost_report
 
 # Windows 控制台默认 GBK，打印含 emoji 的模型回答会崩溃；
 # 这里把标准输出重配为 UTF-8（无法编码的字符用 ? 代替，绝不抛异常）。
@@ -74,6 +75,8 @@ def run_one_shot(task: str, save_path: str | None = None, resume_path: str | Non
     else:
         print(result.answer)  # 兜底：无流式内容（如空回答）时整段打印
     print(f"\n[完成：{result.iterations} 轮，{result.tool_calls} 次工具调用]")
+    if result.cost:
+        print(format_cost_report(result.cost, agent.config.price_input_per_million, agent.config.price_output_per_million))
     if save_path:
         agent.save_session(save_path)
         print(f"[会话已保存到 {save_path}]")
@@ -125,7 +128,10 @@ def run_repl(save_path: str | None = None, resume_path: str | None = None, verbo
             printer.finish()
         else:
             print(result.answer)  # 兜底：无流式内容时整段打印
-        print(f"\n[完成：{result.iterations} 轮，{result.tool_calls} 次工具调用]\n")
+        print(f"\n[完成：{result.iterations} 轮，{result.tool_calls} 次工具调用]")
+        if result.cost:
+            print(format_cost_report(result.cost, agent.config.price_input_per_million, agent.config.price_output_per_million))
+        print()
 
     if save_path:
         agent.save_session(save_path)
