@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from .config import Config
 from .history import ConversationHistory
@@ -72,6 +73,19 @@ class CodingAgent:
         self.tracer.summarized(summary)
         return summary
 
+    def _execute_one_tool(self, tc: dict) -> tuple[str, float]:
+        """解析并执行一个工具调用，返回 (结果文本, 耗时秒)。
+
+        独立成方法，便于多工具调用时并行执行（结果由调用方按请求顺序回填）。
+        """
+        started = time.perf_counter()
+        try:
+            args = parse_tool_arguments(tc["arguments"])
+        except ParseError as exc:
+            return f"参数解析失败：{exc}", time.perf_counter() - started
+        result = self.tools.execute(tc["name"], args)
+        return result, time.perf_counter() - started
+
     def run(self, task: str, on_text=None) -> AgentResult:
         """执行一个编程任务，返回最终结果。
 
@@ -95,18 +109,15 @@ class CodingAgent:
             if response.wants_tool_call:
                 # 记录 assistant 的工具调用请求
                 self.history.add_assistant_tool_call(response.tool_calls)
-                # 逐个本地执行工具，并把结果回填
-                for tc in response.tool_calls:
-                    started = time.perf_counter()
-                    try:
-                        args = parse_tool_arguments(tc["arguments"])
-                    except ParseError as exc:
-                        result = f"参数解析失败：{exc}"
-                    else:
-                        result = self.tools.execute(tc["name"], args)
+                # 执行工具：单工具直接跑，多工具并行（结果仍按请求顺序回填）
+                if len(response.tool_calls) == 1:
+                    outcomes = [self._execute_one_tool(response.tool_calls[0])]
+                else:
+                    with ThreadPoolExecutor(max_workers=len(response.tool_calls)) as pool:
+                        outcomes = list(pool.map(self._execute_one_tool, response.tool_calls))
+                for tc, (result, elapsed) in zip(response.tool_calls, outcomes):
                     total_tool_calls += 1
                     self.history.add_tool_result(tc["id"], tc["name"], result)
-                    elapsed = time.perf_counter() - started
                     self.llm.cost.tool_seconds += elapsed
                     self.tracer.tool_done(tc["name"], elapsed, result)
                 continue
