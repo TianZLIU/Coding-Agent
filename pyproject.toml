@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coding-agent"
+version = "0.1.0"
+description = "自研编程智能体：ReAct 工具循环 + 双层沙箱 + 成本统计 + 长期记忆"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.40.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+web = ["streamlit>=1.32.0"]
+
+[project.scripts]
+coding-agent = "main:main"
+
+[tool.setuptools]
+py-modules = ["main", "web_app"]
+
+[tool.setuptools.packages.find]
+include = ["agent*", "eval*"]

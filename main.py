@@ -147,9 +147,14 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """CLI 入口（供 console_scripts 调用）。"""
     args = _parse_args()
     if args.task:
         run_one_shot(" ".join(args.task), save_path=args.save, resume_path=args.resume, verbose=args.verbose)
     else:
         run_repl(save_path=args.save, resume_path=args.resume, verbose=args.verbose)
+
+
+if __name__ == "__main__":
+    main()
