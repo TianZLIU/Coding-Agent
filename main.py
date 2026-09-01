@@ -10,16 +10,28 @@
 REPL 内命令：
   /save [路径]   保存会话（缺省用 --save 指定的路径或 session.json）
   /load <路径>   从文件恢复会话
+  /help          显示帮助
   /exit          退出
 """
 from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import FileHistory, InMemoryHistory
+from prompt_toolkit.styles import Style
+from rich import box
+from rich.console import Console
+from rich.markup import escape as rich_escape
+from rich.panel import Panel
+from rich.table import Table
 
 from agent.agent import CodingAgent
 from agent.config import Config
-from agent.usage import format_cost_report
+from agent.usage import CostStats
 
 # Windows 控制台默认 GBK，打印含 emoji 的模型回答会崩溃；
 # 这里把标准输出重配为 UTF-8（无法编码的字符用 ? 代替，绝不抛异常）。
@@ -27,7 +39,23 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
+console = Console()
+err_console = Console(stderr=True)
+
 DEFAULT_SESSION = "session.json"
+
+_REPL_COMMANDS = WordCompleter(
+    ["/save", "/load", "/help", "/exit", "/quit"], ignore_case=True
+)
+_PROMPT_STYLE = Style.from_dict({"prompt": "bold #00c853"})
+
+
+def _make_history():
+    """命令历史：持久化到用户目录，写入失败则退化为仅本次会话内有效。"""
+    try:
+        return FileHistory(str(Path.home() / ".coding_agent_history"))
+    except Exception:  # noqa: BLE001 —— 历史文件不可写不影响使用
+        return InMemoryHistory()
 
 
 class _StreamPrinter:
@@ -52,47 +80,96 @@ def _build_agent(resume_path: str | None = None, verbose: bool = False) -> Codin
     try:
         config.validate()
     except RuntimeError as exc:
-        print(f"[配置错误] {exc}", file=sys.stderr)
+        err_console.print(f"[bold red]配置错误：[/bold red]{rich_escape(str(exc))}")
         sys.exit(1)
     agent = CodingAgent(config, verbose=verbose)
     if resume_path:
         try:
             agent.load_session(resume_path)
-            print(f"[已从 {resume_path} 恢复会话]")
+            console.print(f"[dim]已从 {rich_escape(resume_path)} 恢复会话[/dim]")
         except (FileNotFoundError, ValueError):
-            print(f"[警告] 会话文件 {resume_path} 不存在或格式错误，将全新开始", file=sys.stderr)
+            console.print(
+                f"[yellow]警告：会话文件 {rich_escape(resume_path)} 不存在或格式错误，将全新开始[/yellow]"
+            )
     return agent
+
+
+def _print_banner(agent: CodingAgent) -> None:
+    console.print(
+        Panel(
+            f"[bold cyan]coding-agent[/bold cyan]  模型 [green]{agent.config.model}[/green]\n"
+            f"工作目录 [dim]{agent.config.working_dir}[/dim]",
+            title="编程智能体",
+            border_style="cyan",
+            box=box.ROUNDED,
+        )
+    )
+    console.print(
+        "[dim]输入任务后回车开始；[/dim]"
+        "[cyan]/save[/cyan][dim] 保存 · [/dim]"
+        "[cyan]/load[/cyan][dim] 恢复 · [/dim]"
+        "[cyan]/help[/cyan][dim] 帮助 · [/dim]"
+        "[cyan]/exit[/cyan][dim] 退出[/dim]\n"
+    )
+
+
+def _print_cost(cost: CostStats, price_in: float, price_out: float) -> None:
+    table = Table(show_header=False, box=box.SIMPLE_HEAVY, title="成本统计", border_style="dim")
+    table.add_column(style="dim")
+    table.add_column(justify="right")
+    table.add_row("模型调用", f"{cost.calls} 次")
+    table.add_row(
+        "输入 / 输出 tokens",
+        f"{cost.prompt_tokens:,} / {cost.completion_tokens:,}（合计 {cost.total_tokens:,}）",
+    )
+    table.add_row(
+        "模型 / 工具 / 总耗时",
+        f"{cost.model_seconds:.1f}s / {cost.tool_seconds:.1f}s / {cost.total_seconds:.1f}s",
+    )
+    table.add_row("估算花费", f"¥{cost.cost(price_in, price_out):.4f}")
+    console.print(table)
+
+
+def _print_done(iterations: int, tool_calls: int) -> None:
+    console.print(f"[bold green]完成[/bold green]：{iterations} 轮，[cyan]{tool_calls}[/cyan] 次工具调用")
 
 
 def run_one_shot(task: str, save_path: str | None = None, resume_path: str | None = None, verbose: bool = False) -> None:
     agent = _build_agent(resume_path, verbose)
-    print(f"任务：{task}\n")
-    print("agent 工作中……\n")
+    console.print(f"任务：[bold]{rich_escape(task)}[/bold]\n")
+    console.print("[dim]agent 工作中……[/dim]\n")
     printer = _StreamPrinter()
     result = agent.run(task, on_text=printer.emit)
     if printer.printed_any:
         printer.finish()
     else:
-        print(result.answer)  # 兜底：无流式内容（如空回答）时整段打印
-    print(f"\n[完成：{result.iterations} 轮，{result.tool_calls} 次工具调用]")
+        console.print(result.answer, markup=False, highlight=False)
+    _print_done(result.iterations, result.tool_calls)
     if result.cost:
-        print(format_cost_report(result.cost, agent.config.price_input_per_million, agent.config.price_output_per_million))
+        _print_cost(result.cost, agent.config.price_input_per_million, agent.config.price_output_per_million)
     if save_path:
         agent.save_session(save_path)
-        print(f"[会话已保存到 {save_path}]")
+        console.print(f"[dim]会话已保存到 {rich_escape(save_path)}[/dim]")
 
 
 def run_repl(save_path: str | None = None, resume_path: str | None = None, verbose: bool = False) -> None:
     agent = _build_agent(resume_path, verbose)
-    print(f"coding-agent 已就绪（模型 {agent.config.model}）")
-    print(f"工作目录：{agent.config.working_dir}")
-    print("输入编程任务后回车开始；/save [路径] 保存，/load <路径> 恢复，/exit 退出。\n")
+    _print_banner(agent)
+    # prompt_toolkit 需要真正的 Windows 控制台；在 Git Bash/mintty 等伪终端里拿不到
+    # 屏幕缓冲区，这里退化为标准 input()（无历史/补全，但功能完整）。
+    try:
+        session = PromptSession(history=_make_history(), completer=_REPL_COMMANDS)
+    except Exception:  # noqa: BLE001 —— 伪终端环境下无屏幕缓冲区，降级即可
+        session = None
 
     while True:
         try:
-            task = input("> ").strip()
+            if session is not None:
+                task = session.prompt([("class:prompt", "> ")], style=_PROMPT_STYLE).strip()
+            else:
+                task = input("> ").strip()
         except (EOFError, KeyboardInterrupt):
-            print()
+            console.print()
             break
         if not task:
             continue
@@ -103,39 +180,45 @@ def run_repl(save_path: str | None = None, resume_path: str | None = None, verbo
         if lowered.startswith("/save"):
             path = task[len("/save"):].strip() or save_path or DEFAULT_SESSION
             agent.save_session(path)
-            print(f"[会话已保存到 {path}]\n")
+            console.print(f"[dim]会话已保存到 {rich_escape(path)}[/dim]\n")
             continue
         if lowered.startswith("/load"):
             path = task[len("/load"):].strip()
             if not path:
-                print("[用法] /load <路径>")
+                console.print("[yellow]用法：/load <路径>[/yellow]")
                 continue
             try:
                 agent.load_session(path)
-                print(f"[已从 {path} 恢复会话]\n")
+                console.print(f"[dim]已从 {rich_escape(path)} 恢复会话[/dim]\n")
             except (FileNotFoundError, ValueError):
-                print(f"[警告] 会话文件 {path} 不存在或格式错误\n")
+                console.print(f"[yellow]警告：会话文件 {rich_escape(path)} 不存在或格式错误[/yellow]\n")
+            continue
+        if lowered == "/help":
+            console.print("[cyan]/save [路径][/cyan]  保存会话到文件")
+            console.print("[cyan]/load <路径>[/cyan]  从文件恢复会话")
+            console.print("[cyan]/exit[/cyan]         退出")
+            console.print()
             continue
 
-        print("agent 工作中……\n")
+        console.print("[dim]agent 工作中……[/dim]\n")
         printer = _StreamPrinter()
         try:
             result = agent.run(task, on_text=printer.emit)
         except Exception as exc:  # noqa: BLE001 —— 显示错误但保持 REPL 存活
-            print(f"[运行出错] {exc}\n")
+            console.print(f"[bold red]运行出错：[/bold red]{rich_escape(str(exc))}\n")
             continue
         if printer.printed_any:
             printer.finish()
         else:
-            print(result.answer)  # 兜底：无流式内容时整段打印
-        print(f"\n[完成：{result.iterations} 轮，{result.tool_calls} 次工具调用]")
+            console.print(result.answer, markup=False, highlight=False)
+        _print_done(result.iterations, result.tool_calls)
         if result.cost:
-            print(format_cost_report(result.cost, agent.config.price_input_per_million, agent.config.price_output_per_million))
-        print()
+            _print_cost(result.cost, agent.config.price_input_per_million, agent.config.price_output_per_million)
+        console.print()
 
     if save_path:
         agent.save_session(save_path)
-        print(f"[会话已保存到 {save_path}]")
+        console.print(f"[dim]会话已保存到 {rich_escape(save_path)}[/dim]")
 
 
 def _parse_args() -> argparse.Namespace:
