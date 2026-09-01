@@ -31,6 +31,10 @@ class ConversationHistory:
         self.budget_tokens = budget_tokens
         self.messages: list[dict] = []
         self.summaries: list[str] = []
+        # usage 锚定估算状态：_token_ratio 由真实 prompt_tokens 动态校准，
+        # 为 None 时退回 estimate_tokens 的固定启发式（英文 4 字符/token）。
+        self._token_ratio: float | None = None
+        self._last_view_chars: int = 0
 
     # —— 增 ——
 
@@ -82,11 +86,23 @@ class ConversationHistory:
             result.append(
                 {"role": "user", "content": "[前面对话摘要]\n" + "\n\n".join(self.summaries)}
             )
-        return result + self.messages
+        full = result + self.messages
+        # 记录本次发送视图的字符数，供下一轮 record_usage 校准 token 比例
+        self._last_view_chars = len(json.dumps(full, ensure_ascii=False))
+        return full
 
     def token_count(self) -> int:
         """当前历史（含 system、摘要、消息）的估算 token 数，供 --verbose 追踪显示。"""
         return self._total_tokens()
+
+    def record_usage(self, prompt_tokens: int) -> None:
+        """用 API 返回的真实 prompt_tokens 校准估算比例（usage 锚定）。
+
+        ratio = 实测 prompt_tokens / 上一次发送视图的字符数；此后 _total_tokens
+        据此把「字符数」换算成 token，比固定「4 字符/token」更贴近模型真实分词。
+        """
+        if prompt_tokens > 0 and self._last_view_chars > 0:
+            self._token_ratio = prompt_tokens / self._last_view_chars
 
     # —— 内部 ——
 
@@ -118,7 +134,18 @@ class ConversationHistory:
                 return i
         return None
 
+    def _current_chars(self) -> int:
+        """当前历史（system + 摘要 + messages）JSON 序列化后的字符数，与 ratio 口径一致。"""
+        total = len(json.dumps({"role": "system", "content": self.system_prompt}, ensure_ascii=False))
+        for summary in self.summaries:
+            total += len(json.dumps({"role": "user", "content": "[前面对话摘要]\n" + summary}, ensure_ascii=False))
+        for msg in self.messages:
+            total += len(json.dumps(msg, ensure_ascii=False))
+        return total
+
     def _total_tokens(self) -> int:
+        if self._token_ratio is not None:
+            return max(1, round(self._current_chars() * self._token_ratio))
         total = estimate_tokens(self.system_prompt)
         for summary in self.summaries:
             total += estimate_tokens(summary)

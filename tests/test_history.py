@@ -111,6 +111,32 @@ class SummarizeTest(unittest.TestCase):
         self.assertEqual(h.summaries, [])
 
 
+class UsageAnchorTest(unittest.TestCase):
+    def test_record_usage_sets_ratio(self):
+        h = ConversationHistory("SYS", 100000)
+        h.add_user("hello world")
+        h.build()
+        self.assertIsNone(h._token_ratio)  # 初始无校准
+        h.record_usage(20)
+        self.assertIsNotNone(h._token_ratio)
+        self.assertGreater(h._token_ratio, 0)
+
+    def test_record_usage_ignores_zero(self):
+        h = ConversationHistory("SYS", 100000)
+        h.add_user("hello")
+        h.build()
+        h.record_usage(0)
+        self.assertIsNone(h._token_ratio)
+
+    def test_record_usage_calibrates_token_count(self):
+        h = ConversationHistory("SYS", 100000)
+        h.add_user("hello world")
+        h.build()
+        chars = h._last_view_chars
+        h.record_usage(chars * 2)  # 校准为每字符 2 token
+        self.assertEqual(h.token_count(), round(h._current_chars() * 2))
+
+
 class PersistenceTest(unittest.TestCase):
     def test_save_load_round_trip(self):
         with tempfile.TemporaryDirectory() as d:
