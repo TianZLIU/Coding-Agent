@@ -4,8 +4,14 @@
 并在超出 token 预算时裁剪最早的非关键轮次，同时始终保留 system 提示词与
 第一条用户指令。
 
-裁剪以「完整轮次」为单位进行，避免拆散 assistant 工具调用与其对应的 tool
-结果，从而保证消息序列对 API 始终合法。
+上下文压缩采用「cheap-first」四层管线：
+- L3 大结果落盘：单条工具结果超阈值 → 写盘 .agent_results/<id>.txt，视图只留句柄+预览；
+- L2 旧结果占位：非最近 N 条工具结果 → 视图内容换占位符，保留 tool_call_id 保配对；
+- L1 裁中间：消息条数超限 → 留头尾、中间插 [snipped] 占位（对齐安全切点）；
+- L4 摘要（兜底）：前三层免费压缩后仍超预算，才调用模型把最早轮次总结后删除。
+
+L3/L2/L1 都是「视图级」压缩，不改动 self.messages 原文、不调 API（零耗损）；
+只有 L4 是 lossy 且要花 API 钱，所以被放到最后。
 """
 from __future__ import annotations
 
@@ -13,6 +19,14 @@ import json
 import os
 import tempfile
 from pathlib import Path
+
+# —— 免费层阈值（可按需调整）——
+LARGE_RESULT_CHARS = 2000   # L3：单条工具结果超过该字符数即落盘
+LARGE_RESULT_PREVIEW = 200  # L3：落盘后视图保留的预览字符数
+RECENT_RESULTS = 8          # L2：保留最近 N 条工具结果的完整内容
+MAX_VIEW_MESSAGES = 40      # L1：视图消息条数上限
+KEEP_HEAD = 3               # L1：保留头部条数
+KEEP_TAIL = 20              # L1：保留尾部条数
 
 
 def estimate_tokens(text: str) -> int:
@@ -25,10 +39,24 @@ def estimate_tokens(text: str) -> int:
     return ascii_chars // 4 + cjk_chars
 
 
+def _is_safe_cut(view: list[dict], i: int) -> bool:
+    """切点 i（切在 view[i-1] 与 view[i] 之间）是否安全。
+
+    左边不能是待配对的 assistant(tool_calls)、右边不能是孤立的 tool 结果，
+    否则会拆散 tool_call 与 tool_result 的配对，导致消息序列对 API 非法。
+    """
+    left = view[i - 1]
+    right = view[i]
+    left_is_tool_call = left["role"] == "assistant" and left.get("tool_calls")
+    right_is_tool = right["role"] == "tool"
+    return not left_is_tool_call and not right_is_tool
+
+
 class ConversationHistory:
-    def __init__(self, system_prompt: str, budget_tokens: int):
+    def __init__(self, system_prompt: str, budget_tokens: int, results_dir: Path | None = None):
         self.system_prompt = system_prompt
         self.budget_tokens = budget_tokens
+        self.results_dir = results_dir  # L3 落盘目录（None 则禁用 L3）
         self.messages: list[dict] = []
         self.summaries: list[str] = []
         # usage 锚定估算状态：_token_ratio 由真实 prompt_tokens 动态校准，
@@ -74,59 +102,124 @@ class ConversationHistory:
     # —— 组装 ——
 
     def build(self, summarizer=None) -> list[dict]:
-        """返回发给模型的消息列表，并就地压缩/裁剪超预算的历史。
+        """返回发给模型的消息列表，并就地压缩超预算的历史。
 
-        summarizer：可选，签名 (list[dict]) -> str，用于把将被裁剪的最早轮次
-        先总结成摘要再丢弃；为 None 时退化为「直接丢弃」。压缩得到的摘要统一
-        插在 system 之后，独立保存、不会被再次裁剪。
+        cheap-first：先施加免费的视图级压缩（L3/L2/L1），若压缩后的视图仍超
+        预算，才退到 L4（调用 summarizer 总结最早轮次并删除）。summarizer 为
+        None 时 L4 退化为「直接丢弃最早轮次」。
         """
-        self._trim_if_needed(summarizer)
-        result = [{"role": "system", "content": self.system_prompt}]
-        if self.summaries:
-            result.append(
-                {"role": "user", "content": "[前面对话摘要]\n" + "\n\n".join(self.summaries)}
-            )
-        full = result + self.messages
-        # 记录本次发送视图的字符数，供下一轮 record_usage 校准 token 比例
-        self._last_view_chars = len(json.dumps(full, ensure_ascii=False))
-        return full
+        while True:
+            view = self._free_view()
+            if self._tokens_of_view(view) <= self.budget_tokens:
+                break
+            if not self._summarize_oldest_round(summarizer):
+                # 无可裁剪轮次（如单任务只有一条 user），交由 max_iterations 兜底
+                break
+        result = self._assemble(view)
+        self._last_view_chars = len(json.dumps(result, ensure_ascii=False))
+        return result
 
     def token_count(self) -> int:
-        """当前历史（含 system、摘要、消息）的估算 token 数，供 --verbose 追踪显示。"""
-        return self._total_tokens()
+        """当前视图（免费压缩后）的估算 token 数，供 --verbose 追踪显示。"""
+        return self._tokens_of_view(self._free_view(write_disk=False))
 
     def record_usage(self, prompt_tokens: int) -> None:
         """用 API 返回的真实 prompt_tokens 校准估算比例（usage 锚定）。
 
-        ratio = 实测 prompt_tokens / 上一次发送视图的字符数；此后 _total_tokens
+        ratio = 实测 prompt_tokens / 上一次发送视图的字符数；此后 _tokens_of_view
         据此把「字符数」换算成 token，比固定「4 字符/token」更贴近模型真实分词。
         """
         if prompt_tokens > 0 and self._last_view_chars > 0:
             self._token_ratio = prompt_tokens / self._last_view_chars
 
-    # —— 内部 ——
+    # —— 免费层压缩（视图级，非破坏）——
 
-    def _trim_if_needed(self, summarizer=None) -> None:
-        """超出预算时，从第二条 user 消息开始压缩最早的完整轮次。
+    def _free_view(self, write_disk: bool = True) -> list[dict]:
+        """对当前消息施加 L3→L2→L1 免费压缩，返回压缩后的视图副本。
+
+        不修改 self.messages；L3 会把大结果写盘（write_disk=True 时）。
+        """
+        view = [dict(m) for m in self.messages]
+        view = self._l3_offload(view, write_disk)
+        view = self._l2_placeholder(view)
+        view = self._l1_cut_middle(view)
+        return view
+
+    def _l3_offload(self, view: list[dict], write_disk: bool) -> list[dict]:
+        """L3：超长工具结果写盘，视图只留句柄 + 预览，避免塞满全文。"""
+        if self.results_dir is None:
+            return view
+        for i, msg in enumerate(view):
+            if msg["role"] != "tool":
+                continue
+            content = msg.get("content", "")
+            if len(content) <= LARGE_RESULT_CHARS:
+                continue
+            file_name = f"{msg.get('tool_call_id', i)}.txt"
+            if write_disk:
+                self.results_dir.mkdir(parents=True, exist_ok=True)
+                (self.results_dir / file_name).write_text(content, encoding="utf-8")
+            preview = content[:LARGE_RESULT_PREVIEW]
+            msg["content"] = (
+                f"[persisted-output] 该工具结果共 {len(content)} 字符，"
+                f"已落盘到 .agent_results/{file_name}。前 {LARGE_RESULT_PREVIEW} 字符预览：\n"
+                f"{preview}\n"
+                f"需要完整内容时用 read_file 读取 .agent_results/{file_name}。"
+            )
+        return view
+
+    def _l2_placeholder(self, view: list[dict]) -> list[dict]:
+        """L2：非最近 RECENT_RESULTS 条工具结果 → 内容换占位符，保留 tool_call_id。"""
+        tool_indices = [i for i, m in enumerate(view) if m["role"] == "tool"]
+        if len(tool_indices) <= RECENT_RESULTS:
+            return view
+        keep = set(tool_indices[-RECENT_RESULTS:])
+        for i in tool_indices:
+            # 已被 L3 落盘的大结果保留句柄（可恢复），不被 L2 的不可恢复占位覆盖
+            if i not in keep and not view[i]["content"].startswith("[persisted-output]"):
+                view[i]["content"] = "[Earlier tool result compacted]"
+        return view
+
+    def _l1_cut_middle(self, view: list[dict]) -> list[dict]:
+        """L1：消息条数超限时，留头 KEEP_HEAD + 尾 KEEP_TAIL，中间插占位。
+
+        切点对齐到安全边界（不拆散 tool_call 与其 tool 结果）。
+        """
+        if len(view) <= MAX_VIEW_MESSAGES:
+            return view
+        head_end = min(KEEP_HEAD, len(view))
+        while head_end < len(view) and not _is_safe_cut(view, head_end):
+            head_end += 1
+        tail_start = max(head_end, len(view) - KEEP_TAIL)
+        while tail_start > head_end and not _is_safe_cut(view, tail_start):
+            tail_start -= 1
+        if tail_start <= head_end:
+            return view  # 头尾已相接，无需裁
+        snipped = tail_start - head_end
+        placeholder = {"role": "user", "content": f"[snipped {snipped} messages]"}
+        return view[:head_end] + [placeholder] + view[tail_start:]
+
+    # —— L4：摘要兜底（破坏性，删 self.messages）——
+
+    def _summarize_oldest_round(self, summarizer) -> bool:
+        """总结并删除最早的完整轮次（从第二条 user 开始）。返回是否真删了一轮。
 
         提供 summarizer 时先「总结再裁剪」以保留关键信息；总结失败则退回
         「直接丢弃」。摘要累积到独立列表，messages 只删不插，保证循环必然终止。
         """
-        while self._total_tokens() > self.budget_tokens:
-            second_user_idx = self._find_next_user_idx(start=1)
-            if second_user_idx is None:
-                # 只剩首条 user 任务且已超预算：无法安全裁剪（会拆散工具对），
-                # 交由 max_iterations 兜底，防止无限增长。
-                break
-            third_user_idx = self._find_next_user_idx(start=second_user_idx + 1)
-            end = third_user_idx if third_user_idx is not None else len(self.messages)
-            old_round = self.messages[second_user_idx:end]
-            del self.messages[second_user_idx:end]
-            if summarizer is not None:
-                try:
-                    self.summaries.append(summarizer(old_round))
-                except Exception:  # noqa: BLE001 —— 总结失败退回直接丢弃
-                    pass
+        second_user_idx = self._find_next_user_idx(start=1)
+        if second_user_idx is None:
+            return False
+        third_user_idx = self._find_next_user_idx(start=second_user_idx + 1)
+        end = third_user_idx if third_user_idx is not None else len(self.messages)
+        old_round = self.messages[second_user_idx:end]
+        del self.messages[second_user_idx:end]
+        if summarizer is not None:
+            try:
+                self.summaries.append(summarizer(old_round))
+            except Exception:  # noqa: BLE001 —— 总结失败退回直接丢弃
+                pass
+        return True
 
     def _find_next_user_idx(self, start: int) -> int | None:
         for i in range(start, len(self.messages)):
@@ -134,24 +227,38 @@ class ConversationHistory:
                 return i
         return None
 
-    def _current_chars(self) -> int:
-        """当前历史（system + 摘要 + messages）JSON 序列化后的字符数，与 ratio 口径一致。"""
+    # —— token 估算 ——
+
+    def _assemble(self, view: list[dict]) -> list[dict]:
+        result = [{"role": "system", "content": self.system_prompt}]
+        if self.summaries:
+            result.append(
+                {"role": "user", "content": "[前面对话摘要]\n" + "\n\n".join(self.summaries)}
+            )
+        return result + view
+
+    def _chars_for(self, view: list[dict]) -> int:
+        """视图（system + 摘要 + messages）序列化后的字符数，与 ratio 口径一致。"""
         total = len(json.dumps({"role": "system", "content": self.system_prompt}, ensure_ascii=False))
         for summary in self.summaries:
             total += len(json.dumps({"role": "user", "content": "[前面对话摘要]\n" + summary}, ensure_ascii=False))
-        for msg in self.messages:
+        for msg in view:
             total += len(json.dumps(msg, ensure_ascii=False))
         return total
 
-    def _total_tokens(self) -> int:
+    def _tokens_of_view(self, view: list[dict]) -> int:
         if self._token_ratio is not None:
-            return max(1, round(self._current_chars() * self._token_ratio))
+            return max(1, round(self._chars_for(view) * self._token_ratio))
         total = estimate_tokens(self.system_prompt)
         for summary in self.summaries:
-            total += estimate_tokens(summary)
-        for msg in self.messages:
+            total += estimate_tokens("[前面对话摘要]\n" + summary)
+        for msg in view:
             total += estimate_tokens(json.dumps(msg, ensure_ascii=False))
         return total
+
+    def _current_chars(self) -> int:
+        """当前未压缩历史的字符数（兼容旧接口，测试与 record_usage 使用）。"""
+        return self._chars_for(self.messages)
 
     # —— 持久化 ——
 

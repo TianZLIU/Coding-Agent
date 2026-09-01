@@ -24,3 +24,6 @@ Thumbs.db
 session.json
 *.session.json
 .web_session.json
+
+# 上下文压缩 L3 落盘的大工具结果（运行时生成，不入库）
+.agent_results/

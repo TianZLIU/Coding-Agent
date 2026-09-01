@@ -14,6 +14,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from .config import Config
 from .history import ConversationHistory
@@ -75,7 +76,11 @@ class CodingAgent:
         # 长期记忆：加载工作目录的 .agent_memory.md，注入 system prompt，并挂载 memory 工具
         self.memory = MemoryStore(config.working_dir)
         self.tools.add(make_memory_tool(self.memory))
-        self.history = ConversationHistory(self._build_system_prompt(), config.context_budget_tokens)
+        self.history = ConversationHistory(
+            self._build_system_prompt(),
+            config.context_budget_tokens,
+            results_dir=Path(config.working_dir) / ".agent_results",
+        )
         self.tracer = Tracer(verbose)
 
     def _build_system_prompt(self) -> str:
