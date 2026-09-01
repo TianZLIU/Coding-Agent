@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 from .base import Tool
+from .files import _truncate
 
 # 命中即视为「破坏性 / 危险」的命令模式。默认拒绝执行，要求模型显式二次确认。
 DANGEROUS_PATTERNS: list[tuple[str, str]] = [
@@ -87,7 +88,7 @@ def make_shell_tool(working_dir: str, max_output_chars: int) -> Tool:
         if proc.stderr:
             parts.append(f"[stderr]\n{proc.stderr.strip()}")
         combined = "\n".join(parts).strip() or "(无输出)"
-        combined = combined[:max_output_chars] + ("\n...(输出已截断)" if len(combined) >= max_output_chars else "")
+        combined = _truncate(combined, max_output_chars)
         return f"退出码 {proc.returncode}\n{combined}"
 
     return Tool(

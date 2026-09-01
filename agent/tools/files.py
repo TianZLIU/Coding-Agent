@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -28,9 +29,18 @@ def _resolve(working_dir: str, raw_path: str) -> Path:
 
 
 def _truncate(text: str, limit: int) -> str:
-    if len(text) > limit:
-        return text[:limit] + "\n...(输出已截断)"
-    return text
+    """截断到 limit 字符内，保留头部与尾部，中间用省略标记连接。
+
+    关键信息常出现在输出末尾（如 Python traceback 的最底行、报错码），
+    只留头会丢掉它们；留头尾能在有限预算里同时保住两端的可读性。
+    """
+    if len(text) <= limit:
+        return text
+    sep = "\n...(中间省略)...\n"
+    if limit <= len(sep):
+        return text[:limit]
+    half = (limit - len(sep)) // 2
+    return text[:half] + sep + text[-half:]
 
 
 def make_file_tools(working_dir: str, max_output_chars: int) -> list[Tool]:
@@ -98,6 +108,53 @@ def make_file_tools(working_dir: str, max_output_chars: int) -> list[Tool]:
         rel = [str(m.relative_to(base)) if m != base else m.name for m in matches]
         return _truncate("\n".join(rel[:200]) or "无匹配。", max_output_chars)
 
+    def grep(args: dict) -> str:
+        pattern = args.get("pattern", "")
+        if not pattern:
+            return "错误：pattern 不能为空。"
+        base = _resolve(working_dir, args.get("path", "."))
+        if not base.exists():
+            return f"错误：路径不存在：{base}"
+        if not base.is_dir():
+            return f"错误：{base} 不是目录。"
+        glob_pattern = args.get("glob")
+        use_regex = bool(args.get("regex", False))
+        max_matches = int(args.get("max_matches", 200))
+
+        if use_regex:
+            try:
+                matcher = re.compile(pattern)
+            except re.error as exc:
+                return f"错误：正则表达式无效：{exc}"
+        else:
+            matcher = None
+
+        hits: list[str] = []
+        truncated = False
+        for fp in sorted(base.rglob(glob_pattern or "*")):
+            if not fp.is_file():
+                continue
+            try:
+                rel = str(fp.relative_to(base)) if fp != base else fp.name
+                text = fp.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for line_no, line in enumerate(text.splitlines(), 1):
+                ok = matcher.search(line) if matcher is not None else pattern in line
+                if not ok:
+                    continue
+                if len(hits) >= max_matches:
+                    truncated = True
+                    break
+                hits.append(f"{rel}:{line_no}: {line.strip()}")
+            if truncated:
+                break
+
+        if not hits:
+            return "无匹配。"
+        suffix = "\n...(命中过多，已截断)" if truncated else ""
+        return _truncate("\n".join(hits) + suffix, max_output_chars)
+
     return [
         Tool(
             name="list_dir",
@@ -146,5 +203,18 @@ def make_file_tools(working_dir: str, max_output_chars: int) -> list[Tool]:
             },
             required=["pattern"],
             handler=glob_files,
+        ),
+        Tool(
+            name="grep",
+            description="在指定目录下按内容搜索，返回匹配的文件路径、行号与命中行。",
+            parameters={
+                "pattern": {"type": "string", "description": "要搜索的字符串或正则表达式"},
+                "path": {"type": "string", "description": "搜索起点目录，默认当前目录"},
+                "glob": {"type": "string", "description": "限定文件类型，如 *.py（可选）"},
+                "regex": {"type": "boolean", "description": "是否按正则匹配，默认 false（子串匹配）"},
+                "max_matches": {"type": "integer", "description": "最多返回的命中行数，默认 200"},
+            },
+            required=["pattern"],
+            handler=grep,
         ),
     ]

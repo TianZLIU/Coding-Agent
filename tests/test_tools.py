@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 
-from agent.tools.files import make_file_tools
+from agent.tools.files import _truncate, make_file_tools
 from agent.tools.shell import _outside_path, make_shell_tool
 
 
@@ -69,11 +69,52 @@ class FileToolsTest(unittest.TestCase):
         self.assertIn("x.py", out)
         self.assertNotIn("y.txt", out)
 
+    def test_grep_substring(self):
+        self._call("write_file", {"path": "a.py", "content": "def foo():\n    return 1\nfoo()\n"})
+        out = self._call("grep", {"pattern": "foo"})
+        self.assertIn("a.py:1:", out)
+        self.assertIn("a.py:3:", out)
+        self.assertNotIn("return 1", out)
+
+    def test_grep_regex(self):
+        self._call("write_file", {"path": "a.py", "content": "x = 1\ny = 2\nz = 3\n"})
+        out = self._call("grep", {"pattern": r"^[xy] =", "regex": True})
+        self.assertIn("x = 1", out)
+        self.assertIn("y = 2", out)
+        self.assertNotIn("z = 3", out)
+
+    def test_grep_glob_filter(self):
+        self._call("write_file", {"path": "a.py", "content": "needle"})
+        self._call("write_file", {"path": "b.txt", "content": "needle"})
+        out = self._call("grep", {"pattern": "needle", "glob": "*.py"})
+        self.assertIn("a.py", out)
+        self.assertNotIn("b.txt", out)
+
+    def test_grep_no_match(self):
+        self._call("write_file", {"path": "a.py", "content": "hello"})
+        out = self._call("grep", {"pattern": "zzz"})
+        self.assertIn("无匹配", out)
+
+    def test_grep_empty_pattern(self):
+        out = self._call("grep", {"pattern": ""})
+        self.assertIn("不能为空", out)
+
     def test_path_escape_is_rejected(self):
         """越出 working_dir 的绝对路径应被拒绝（sandbox 化）。"""
         outside = os.path.join(os.path.dirname(self.wd), "outside.txt")
         with self.assertRaises(ValueError):
             self._call("read_file", {"path": outside})
+
+    def test_truncate_keeps_head_and_tail(self):
+        text = "HEAD\n" + "\n".join(f"line{i}" for i in range(1000)) + "\nTAIL"
+        out = _truncate(text, 200)
+        self.assertIn("HEAD", out)
+        self.assertIn("TAIL", out)  # 尾部（如 traceback 末行）被保留
+        self.assertIn("中间省略", out)
+        self.assertLessEqual(len(out), 200)
+
+    def test_truncate_passthrough_when_short(self):
+        self.assertEqual(_truncate("short", 100), "short")
 
 
 class ShellToolTest(unittest.TestCase):
