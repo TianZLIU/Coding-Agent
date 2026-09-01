@@ -10,6 +10,9 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from pathlib import Path
 
 
 def estimate_tokens(text: str) -> int:
@@ -144,9 +147,21 @@ class ConversationHistory:
         return obj
 
     def save(self, path: str) -> None:
-        """将会话保存为 UTF-8 JSON 文件。"""
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
+        """将会话保存为 UTF-8 JSON 文件（原子写：先写临时文件再替换，中途崩溃不损坏旧文件）。"""
+        target = Path(path)
+        fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=target.name + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     @classmethod
     def load(cls, path: str) -> "ConversationHistory":

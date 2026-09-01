@@ -128,6 +128,10 @@ class PersistenceTest(unittest.TestCase):
             self.assertEqual(h2.summaries, ["summary"])
             self.assertEqual(h2.messages, h.messages)
 
+            # 原子写：目录内不应残留 .tmp 临时文件
+            leftovers = [n for n in os.listdir(d) if n.endswith(".tmp")]
+            self.assertEqual(leftovers, [])
+
 
 if __name__ == "__main__":
     unittest.main()
