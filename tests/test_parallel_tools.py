@@ -27,7 +27,9 @@ class _FakeLLM:
 class ParallelToolsTest(unittest.TestCase):
     def test_multiple_tool_calls_execute_and_backfill_in_order(self):
         with tempfile.TemporaryDirectory() as tmp:
-            config = Config(working_dir=tmp)
+            # 传入假 key：CodingAgent 构造会实例化 LLMClient（进而构造 OpenAI 客户端），
+            # openai 2.x 对空 api_key 会在构造时抛错，这里用假 key 绕过（随后立即替换为 _FakeLLM，不会真实请求）。
+            config = Config(api_key="test-key", working_dir=tmp)
             agent = CodingAgent(config)
             agent.llm = _FakeLLM([
                 ChatResponse(
