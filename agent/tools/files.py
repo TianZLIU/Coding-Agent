@@ -161,6 +161,7 @@ def make_file_tools(working_dir: str, max_output_chars: int) -> list[Tool]:
             description="列出指定目录下的文件和子目录。",
             parameters={"path": {"type": "string", "description": "目录路径，默认当前目录"}},
             handler=list_dir,
+            read_only=True,
         ),
         Tool(
             name="read_file",
@@ -172,6 +173,7 @@ def make_file_tools(working_dir: str, max_output_chars: int) -> list[Tool]:
             },
             required=["path"],
             handler=read_file,
+            read_only=True,
         ),
         Tool(
             name="write_file",
@@ -203,6 +205,7 @@ def make_file_tools(working_dir: str, max_output_chars: int) -> list[Tool]:
             },
             required=["pattern"],
             handler=glob_files,
+            read_only=True,
         ),
         Tool(
             name="grep",
@@ -216,5 +219,6 @@ def make_file_tools(working_dir: str, max_output_chars: int) -> list[Tool]:
             },
             required=["pattern"],
             handler=grep,
+            read_only=True,
         ),
     ]

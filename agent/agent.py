@@ -109,6 +109,20 @@ class CodingAgent:
         result = self.tools.execute(tc["name"], args)
         return result, time.perf_counter() - started
 
+    def _execute_tools(self, tool_calls: list[dict]) -> list[tuple[str, float]]:
+        """执行一批工具调用：只读工具并行、含写工具串行（结果按请求顺序回填）。
+
+        只读工具（list_dir / read_file / glob_files / grep）无副作用，并行可提速；
+        含写工具（write_file / edit_file / run_command）可能相互依赖或有写读竞态，
+        一旦出现含写工具就整体按请求顺序串行，避免「写 A 后读 A」的时序错乱。
+        """
+        if len(tool_calls) == 1:
+            return [self._execute_one_tool(tool_calls[0])]
+        if all(self.tools.is_read_only(tc["name"]) for tc in tool_calls):
+            with ThreadPoolExecutor(max_workers=len(tool_calls)) as pool:
+                return list(pool.map(self._execute_one_tool, tool_calls))
+        return [self._execute_one_tool(tc) for tc in tool_calls]
+
     def run(self, task: str, on_text=None) -> AgentResult:
         """执行一个编程任务，返回最终结果。
 
@@ -128,16 +142,15 @@ class CodingAgent:
             else:
                 response = self.llm.chat(messages, self.tools.schemas())
             self.tracer.model_elapsed(time.perf_counter() - started)
+            # 用真实 prompt_tokens 校准下一轮的 token 估算（usage 锚定）
+            if response.usage:
+                self.history.record_usage(response.usage.get("prompt_tokens", 0))
 
             if response.wants_tool_call:
                 # 记录 assistant 的工具调用请求
                 self.history.add_assistant_tool_call(response.tool_calls)
-                # 执行工具：单工具直接跑，多工具并行（结果仍按请求顺序回填）
-                if len(response.tool_calls) == 1:
-                    outcomes = [self._execute_one_tool(response.tool_calls[0])]
-                else:
-                    with ThreadPoolExecutor(max_workers=len(response.tool_calls)) as pool:
-                        outcomes = list(pool.map(self._execute_one_tool, response.tool_calls))
+                # 执行工具：只读并行、含写串行（结果仍按请求顺序回填）
+                outcomes = self._execute_tools(response.tool_calls)
                 for tc, (result, elapsed) in zip(response.tool_calls, outcomes):
                     total_tool_calls += 1
                     self.history.add_tool_result(tc["id"], tc["name"], result)

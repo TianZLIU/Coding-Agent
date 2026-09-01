@@ -16,6 +16,7 @@ class Tool:
     parameters: dict[str, Any]       # JSON Schema 的 properties
     handler: Callable[[dict], str]   # 本地执行函数，入参为解析后的参数字典
     required: list[str] = field(default_factory=list)
+    read_only: bool = False          # True 表示无副作用，可与其它只读工具并行
 
     def to_openai_schema(self) -> dict:
         """转换为 OpenAI function-calling 格式的工具描述。"""
@@ -41,6 +42,11 @@ class Toolbox:
 
     def schemas(self) -> list[dict]:
         return [t.to_openai_schema() for t in self._map.values()]
+
+    def is_read_only(self, name: str) -> bool:
+        """工具是否为只读（无副作用），用于决定可否并行执行。"""
+        tool = self._map.get(name)
+        return tool is not None and tool.read_only
 
     def execute(self, name: str, args: dict) -> str:
         """执行工具，任何异常都转成给模型的错误描述（错误处理的一部分）。

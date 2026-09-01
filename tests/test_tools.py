@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 
+from agent.tools.base import Toolbox
 from agent.tools.files import _truncate, make_file_tools
 from agent.tools.shell import _outside_path, make_shell_tool
 
@@ -105,6 +106,18 @@ class FileToolsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._call("read_file", {"path": outside})
 
+    def test_read_only_flags(self):
+        for name in ("list_dir", "read_file", "glob_files", "grep"):
+            self.assertTrue(self.tools[name].read_only, name)
+        for name in ("write_file", "edit_file"):
+            self.assertFalse(self.tools[name].read_only, name)
+
+    def test_toolbox_is_read_only(self):
+        box = Toolbox(list(self.tools.values()))
+        self.assertTrue(box.is_read_only("read_file"))
+        self.assertFalse(box.is_read_only("write_file"))
+        self.assertFalse(box.is_read_only("unknown"))
+
     def test_truncate_keeps_head_and_tail(self):
         text = "HEAD\n" + "\n".join(f"line{i}" for i in range(1000)) + "\nTAIL"
         out = _truncate(text, 200)
@@ -143,6 +156,9 @@ class ShellToolTest(unittest.TestCase):
     def test_command_with_outside_path_is_intercepted(self):
         out = self._call({"command": "cat ../outside.txt"})
         self.assertIn("已拦截", out)
+
+    def test_run_command_is_not_read_only(self):
+        self.assertFalse(self.tool.read_only)
 
 
 class PathGuardTest(unittest.TestCase):
