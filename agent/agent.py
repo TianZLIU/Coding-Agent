@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from .config import Config
 from .history import ConversationHistory
 from .llm import LLMClient
+from .memory import MemoryStore, make_memory_tool
 from .parser import ParseError, parse_tool_arguments
 from .tools import build_toolbox
 from .trace import Tracer
@@ -26,7 +27,7 @@ SYSTEM_PROMPT = """你是一个编程智能体（coding agent），运行在用�
 你的任务是通过读写文件、执行命令，自主完成用户交给你的编程任务。
 
 工作方式：
-1. 你可以调用工具（list_dir / read_file / write_file / edit_file / glob_files / grep / run_command）。
+1. 你可以调用工具（list_dir / read_file / write_file / edit_file / glob_files / grep / run_command / memory）。
 2. 每次调用工具后，你会收到执行结果，然后基于结果决定下一步。
 3. 当你认为任务已完成时，停止调用工具，直接用文字总结你做了什么、结果如何。
 
@@ -71,8 +72,22 @@ class CodingAgent:
         self.config = config
         self.llm = LLMClient(config)
         self.tools = build_toolbox(config)
-        self.history = ConversationHistory(SYSTEM_PROMPT, config.context_budget_tokens)
+        # 长期记忆：加载工作目录的 .agent_memory.md，注入 system prompt，并挂载 memory 工具
+        self.memory = MemoryStore(config.working_dir)
+        self.tools.add(make_memory_tool(self.memory))
+        self.history = ConversationHistory(self._build_system_prompt(), config.context_budget_tokens)
         self.tracer = Tracer(verbose)
+
+    def _build_system_prompt(self) -> str:
+        """SYSTEM_PROMPT + 长期记忆段（若有）。记忆放 system 前缀，利于 prefix cache。"""
+        memory_text = self.memory.load()
+        if not memory_text:
+            return SYSTEM_PROMPT
+        return (
+            SYSTEM_PROMPT
+            + "\n\n## 长期记忆（跨会话项目约定，可用 memory 工具更新）\n"
+            + memory_text
+        )
 
     def _summarize(self, messages: list[dict]) -> str:
         """把一段历史轮次压缩成摘要（调用模型，不带工具）。"""

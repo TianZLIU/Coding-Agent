@@ -43,6 +43,10 @@ class Toolbox:
     def schemas(self) -> list[dict]:
         return [t.to_openai_schema() for t in self._map.values()]
 
+    def add(self, tool: Tool) -> None:
+        """追加一个工具（供 agent 构造时动态补充，如 memory 工具）。"""
+        self._map[tool.name] = tool
+
     def is_read_only(self, name: str) -> bool:
         """工具是否为只读（无副作用），用于决定可否并行执行。"""
         tool = self._map.get(name)
