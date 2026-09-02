@@ -132,6 +132,37 @@ class ConversationHistory:
         if prompt_tokens > 0 and self._last_view_chars > 0:
             self._token_ratio = prompt_tokens / self._last_view_chars
 
+    def context_stats(self) -> dict:
+        """当前上下文状态摘要（只读，供 /context 命令展示）。
+
+        不调用 API、不改动 self.messages；L3/L2/L1 的计数是与 _free_view
+        同源的静态分析——「若此刻组装会触发多少」。L4 摘要数是已实际发生过的次数。
+        """
+        roles: dict[str, int] = {}
+        tool_count = 0
+        large_results = 0
+        for m in self.messages:
+            roles[m["role"]] = roles.get(m["role"], 0) + 1
+            if m["role"] == "tool":
+                tool_count += 1
+                if len(m.get("content", "")) > LARGE_RESULT_CHARS:
+                    large_results += 1
+        offloaded_files = 0
+        if self.results_dir is not None and self.results_dir.exists():
+            offloaded_files = sum(1 for p in self.results_dir.iterdir() if p.is_file())
+        return {
+            "budget_tokens": self.budget_tokens,
+            "tokens": self.token_count(),
+            "ratio_anchored": self._token_ratio is not None,
+            "message_count": len(self.messages),
+            "roles": roles,
+            "summary_count": len(self.summaries),
+            "l3_large_results": large_results,
+            "l3_files_on_disk": offloaded_files,
+            "l2_compacted": max(0, tool_count - RECENT_RESULTS),
+            "l1_over_limit": max(0, len(self.messages) - MAX_VIEW_MESSAGES),
+        }
+
     # —— 免费层压缩（视图级，非破坏）——
 
     def _free_view(self, write_disk: bool = True) -> list[dict]:

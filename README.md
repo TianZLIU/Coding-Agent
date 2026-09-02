@@ -21,7 +21,7 @@ python main.py                                        # 交互式 REPL
 python main.py "用 Python 写一个冒泡排序并测试"          # 单任务模式
 python demo.py                                        # 一键演示（跑通一个完整任务）
 python -m eval.run                                    # 评测 7 个任务的成功率
-python -m unittest discover -s tests                  # 单元测试（104 个）
+python -m unittest discover -s tests                  # 单元测试（108 个）
 ```
 
 > 也可以 `pip install -e .` 安装成命令行工具，之后直接敲 `coding-agent` 进入 REPL（彩色界面、↑ 历史、tab 补全）。
@@ -98,13 +98,13 @@ eval/
 - **声明式技能**：常用工作流沉淀成 `.agents/skills/*/SKILL.md`，清单注入 system（省 token），正文按需 `invoke_skill` 加载。
 - **并行工具执行**：只读并行提速，含写串行保因果。
 - **可插拔安全拦截层**：文件越界 + 危险命令双重拦截抽成 pre-tool hook（可组合、可单独测试）；防注入摘要（标签剥离）；会话原子落盘。
-- **可观测**：真实 token / 耗时 / ¥ 成本报告，`--verbose` 执行追踪，7 任务客观评测 + CI。
+- **可观测**：真实 token / 耗时 / ¥ 成本报告，`--verbose` 执行追踪，`/context` 查看上下文用量与四层压缩状态，7 任务客观评测 + CI。
 - **交互**：彩色 CLI（rich）+ 历史 / 补全（prompt_toolkit），也提供 Streamlit 网页版。
 
 ## 测试与评测
 
 ```bash
-python -m unittest discover -s tests   # 单元测试（104 个）
+python -m unittest discover -s tests   # 单元测试（108 个）
 python -m eval.run                    # 7 任务客观评测，输出成功率
 python -m eval.run --only 修复bug     # 只跑某个任务
 ```

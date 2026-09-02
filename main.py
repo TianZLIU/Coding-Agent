@@ -1,4 +1,4 @@
-"""命令行入口。
+r"""命令行入口。
 
 用法：
   python main.py "用 Python 写一个快速排序并测试"   # 单任务模式
@@ -11,6 +11,7 @@
 REPL 内命令：
   /save [路径]   保存会话（缺省用 --save 指定的路径或 session.json）
   /load <路径>   从文件恢复会话
+  /context       查看上下文用量与四层压缩状态
   /help          显示帮助
   /exit          退出
 """
@@ -46,7 +47,7 @@ err_console = Console(stderr=True)
 DEFAULT_SESSION = "session.json"
 
 _REPL_COMMANDS = WordCompleter(
-    ["/save", "/load", "/help", "/exit", "/quit"], ignore_case=True
+    ["/save", "/load", "/context", "/help", "/exit", "/quit"], ignore_case=True
 )
 _PROMPT_STYLE = Style.from_dict({"prompt": "bold #00c853"})
 
@@ -113,6 +114,7 @@ def _print_banner(agent: CodingAgent) -> None:
         "[dim]输入任务后回车开始；[/dim]"
         "[cyan]/save[/cyan][dim] 保存 · [/dim]"
         "[cyan]/load[/cyan][dim] 恢复 · [/dim]"
+        "[cyan]/context[/cyan][dim] 上下文 · [/dim]"
         "[cyan]/help[/cyan][dim] 帮助 · [/dim]"
         "[cyan]/exit[/cyan][dim] 退出[/dim]\n"
     )
@@ -137,6 +139,49 @@ def _print_cost(cost: CostStats, price_in: float, price_out: float) -> None:
 
 def _print_done(iterations: int, tool_calls: int) -> None:
     console.print(f"[bold green]完成[/bold green]：{iterations} 轮，[cyan]{tool_calls}[/cyan] 次工具调用")
+
+
+def _print_context(agent: CodingAgent) -> None:
+    """打印当前上下文状态：token 用量、消息构成、四层压缩触发情况、记忆/技能。"""
+    stats = agent.history.context_stats()
+    budget = stats["budget_tokens"]
+    tokens = stats["tokens"]
+    ratio = tokens / budget if budget else 0.0
+    pct = min(100.0, ratio * 100)
+
+    bar_width = 24
+    filled = round(bar_width * min(1.0, ratio))
+    bar = "█" * filled + "░" * (bar_width - filled)
+    color = "red" if ratio >= 0.95 else "yellow" if ratio >= 0.7 else "green"
+
+    roles = stats["roles"]
+    msg_bits = " / ".join(
+        f"{roles.get(r, 0)} {r}" for r in ("user", "assistant", "tool") if roles.get(r, 0)
+    ) or "（空）"
+    l1 = stats["l1_over_limit"]
+
+    table = Table(box=box.SIMPLE_HEAVY, title="上下文状态", border_style="cyan", show_header=False)
+    table.add_column(style="dim")
+    table.add_column(justify="right")
+    table.add_row("token 用量", f"{tokens:,} / {budget:,}（{pct:.0f}%）")
+    table.add_row("", f"[{color}]{bar}[/]")
+    table.add_row("消息", f"{stats['message_count']} 条 · {msg_bits}")
+    table.add_row("L4 摘要（lossy）", f"{stats['summary_count']} 次")
+    table.add_row("L3 大结果落盘", f"{stats['l3_large_results']} 条待落盘 · 磁盘 {stats['l3_files_on_disk']} 个文件")
+    table.add_row("L2 旧结果占位", f"{stats['l2_compacted']} 条")
+    table.add_row("L1 裁中间", f"触发（超上限 {l1} 条）" if l1 else "未触发")
+    table.add_row(
+        "token 估算",
+        "已用真实 usage 锚定校准" if stats["ratio_anchored"] else "启发式估算（4 字符/token）",
+    )
+    console.print(table)
+
+    mem = agent.memory.load()
+    skills = agent.skills.names()
+    console.print(
+        f"[dim]长期记忆：[/dim]{'已加载 ' + str(len(mem)) + ' 字符' if mem else '无'}  "
+        f"[dim]·  技能：[/dim]{len(skills)} 个{('（' + ', '.join(skills) + '）') if skills else ''}\n"
+    )
 
 
 def run_one_shot(
@@ -209,9 +254,13 @@ def run_repl(
             except (FileNotFoundError, ValueError):
                 console.print(f"[yellow]警告：会话文件 {rich_escape(path)} 不存在或格式错误[/yellow]\n")
             continue
+        if lowered == "/context":
+            _print_context(agent)
+            continue
         if lowered == "/help":
             console.print("[cyan]/save [路径][/cyan]  保存会话到文件")
             console.print("[cyan]/load <路径>[/cyan]  从文件恢复会话")
+            console.print("[cyan]/context[/cyan]       查看上下文用量与压缩状态")
             console.print("[cyan]/exit[/cyan]         退出")
             console.print()
             continue

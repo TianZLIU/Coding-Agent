@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 
-from agent.history import ConversationHistory, estimate_tokens
+from agent.history import RECENT_RESULTS, ConversationHistory, estimate_tokens
 
 
 def make_round(n: int) -> list[dict]:
@@ -157,6 +157,46 @@ class PersistenceTest(unittest.TestCase):
             # 原子写：目录内不应残留 .tmp 临时文件
             leftovers = [n for n in os.listdir(d) if n.endswith(".tmp")]
             self.assertEqual(leftovers, [])
+
+
+class ContextStatsTest(unittest.TestCase):
+    """context_stats：/context 命令所依赖的只读上下文状态摘要。"""
+
+    def test_baseline_stats(self):
+        h = ConversationHistory("SYS", 10000)
+        h.add_user("task")
+        h.add_assistant_tool_call([{"id": "1", "name": "list_dir", "arguments": "{}"}])
+        h.add_tool_result("1", "list_dir", "ok")
+        s = h.context_stats()
+        self.assertEqual(s["budget_tokens"], 10000)
+        self.assertEqual(s["message_count"], 3)
+        self.assertEqual(s["roles"], {"user": 1, "assistant": 1, "tool": 1})
+        self.assertGreater(s["tokens"], 0)
+        self.assertEqual(s["summary_count"], 0)
+        self.assertFalse(s["ratio_anchored"])
+
+    def test_detects_large_result_for_l3(self):
+        h = ConversationHistory("SYS", 100000)
+        h.add_user("task")
+        h.add_assistant_tool_call([{"id": "c1", "name": "read_file", "arguments": "{}"}])
+        h.add_tool_result("c1", "read_file", "x" * 5000)
+        self.assertEqual(h.context_stats()["l3_large_results"], 1)
+
+    def test_detects_l2_compaction_after_many_results(self):
+        h = ConversationHistory("SYS", 100000)
+        h.add_user("task")
+        for i in range(RECENT_RESULTS + 2):
+            cid = f"c{i}"
+            h.add_assistant_tool_call([{"id": cid, "name": "list_dir", "arguments": "{}"}])
+            h.add_tool_result(cid, "list_dir", f"r{i}")
+        self.assertEqual(h.context_stats()["l2_compacted"], 2)
+
+    def test_summary_count_reflects_l4(self):
+        h = ConversationHistory("SYS", 10)
+        h.messages = make_round(1) + make_round(2) + make_round(3)
+        h.build(summarizer=lambda msgs: "sum")
+        self.assertEqual(h.context_stats()["summary_count"], len(h.summaries))
+        self.assertGreater(len(h.summaries), 0)
 
 
 if __name__ == "__main__":
