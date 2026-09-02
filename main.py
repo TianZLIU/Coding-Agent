@@ -103,7 +103,7 @@ def _print_banner(agent: CodingAgent) -> None:
         meta += f"  ·  [dim]技能[/dim] {len(skills)} 个"
     console.print(
         Panel(
-            f"[bold cyan]coding-agent[/bold cyan]  [dim]DeepSeek 驱动的编程智能体[/dim]\n{meta}",
+            f"[bold cyan]coding-agent[/bold cyan]  [dim]LTZ 开发的编程智能体[/dim]\n{meta}",
             border_style="cyan",
             box=box.ROUNDED,
         )
