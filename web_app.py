@@ -162,28 +162,36 @@ with st.sidebar:
     sessions = store.list()
     names = [s["name"] for s in sessions]
     titles = {s["name"]: s["title"] for s in sessions}
-
-    current = st.session_state.get("current_session")
-    cur_key = current if current in names else "__new__"
-    options = ["__new__"] + names
     labels = {"__new__": "＋ 新会话", **titles}
 
-    chosen = st.selectbox(
-        "切换会话",
-        options,
-        index=options.index(cur_key),
-        format_func=lambda n: labels.get(n, n),
-    )
-    if chosen != cur_key:
-        if chosen == "__new__":
+    current = st.session_state.get("current_session")
+
+    # 用固定 key 把 selectbox 的值存在 session_state，靠 on_change 回调切换，
+    # 避免「index 随状态推导 + 手动 st.rerun」在浏览器里与组件内部状态打架
+    # （没有 key 时 Streamlit 按 label/options/index 自动生成内部 key，index 一变
+    #  就被当成新组件，用户刚点的值被丢弃，表现为「点了没反应」）。
+    if "session_picker" not in st.session_state:
+        st.session_state["session_picker"] = current if current in names else "__new__"
+
+    def _on_pick() -> None:
+        picked = st.session_state["session_picker"]
+        if picked == "__new__":
             _start_fresh()
-        else:
-            _load_session(chosen)
-        st.rerun()
+        elif picked != st.session_state.get("current_session"):
+            _load_session(picked)
+
+    st.selectbox(
+        "切换会话",
+        ["__new__"] + names,
+        format_func=lambda n: labels.get(n, n),
+        key="session_picker",
+        on_change=_on_pick,
+    )
 
     if current in names and st.button("🗑️ 删除当前会话", use_container_width=True):
         store.delete(current)
         _start_fresh()
+        st.session_state["session_picker"] = "__new__"
         st.rerun()
 
 
