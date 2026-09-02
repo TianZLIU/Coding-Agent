@@ -41,6 +41,7 @@ agent/
 ├── history.py       对话历史 + 四层 cheap-first 上下文压缩
 ├── agent.py         核心循环（工具循环 + 终止条件 + 并行执行 + 记忆注入）
 ├── memory.py        长期记忆（.agent_memory.md 跨会话）
+├── skills.py        声明式技能（.agents/skills/*/SKILL.md，清单注入 + 按需 invoke）
 ├── trace.py         执行追踪（--verbose）
 ├── usage.py         成本统计（真实 token + 耗时 + ¥）
 └── tools/
@@ -75,7 +76,7 @@ eval/
 | 如何跨会话记忆 | `.agent_memory.md` + `memory` 工具，注入 system prompt 前缀 | 解决「跨任务失忆」，且利于 prefix cache |
 | 为何用 openai SDK | 它是 DeepSeek 官方推荐的 API 客户端（非框架），只承担 HTTP + 反序列化 | 题目允许厂商客户端库 |
 
-## 工具一览（8 个）
+## 工具一览（9 个）
 
 | 工具 | 说明 | 只读 |
 |---|---|---|
@@ -87,11 +88,13 @@ eval/
 | `edit_file` | 精确字符串替换（要求 old_string 唯一） | |
 | `run_command` | 本地执行命令（超时 + 输出截断） | |
 | `memory` | 长期记忆 add / replace / clear | |
+| `invoke_skill` | 按需加载某个技能的完整说明 | ✅ |
 
 ## 特性亮点
 
 - **四层上下文压缩**：免费层（L3 落盘大结果 / L2 占位旧结果 / L1 裁中间）优先于调用模型的摘要，token 估算用真实 usage 动态锚定。
 - **长期记忆**：跨会话记住项目约定，模型可用 `memory` 工具更新。
+- **声明式技能**：常用工作流沉淀成 `.agents/skills/*/SKILL.md`，清单注入 system（省 token），正文按需 `invoke_skill` 加载。
 - **并行工具执行**：只读并行提速，含写串行保因果。
 - **双层安全沙箱**：文件越界 + 危险命令双重拦截；防注入摘要（标签剥离）；会话原子落盘。
 - **可观测**：真实 token / 耗时 / ¥ 成本报告，`--verbose` 执行追踪，5 任务客观评测 + CI。
