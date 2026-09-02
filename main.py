@@ -12,6 +12,7 @@ REPL 内命令：
   /save [路径]   保存会话（缺省用 --save 指定的路径或 session.json）
   /load <路径>   从文件恢复会话
   /context       查看上下文用量与四层压缩状态
+  /compact       手动把当前对话总结成摘要，释放上下文
   /help          显示帮助
   /exit          退出
 """
@@ -47,7 +48,7 @@ err_console = Console(stderr=True)
 DEFAULT_SESSION = "session.json"
 
 _REPL_COMMANDS = WordCompleter(
-    ["/save", "/load", "/context", "/help", "/exit", "/quit"], ignore_case=True
+    ["/save", "/load", "/context", "/compact", "/help", "/exit", "/quit"], ignore_case=True
 )
 _PROMPT_STYLE = Style.from_dict({"prompt": "bold #00c853"})
 
@@ -115,6 +116,7 @@ def _print_banner(agent: CodingAgent) -> None:
         "[cyan]/save[/cyan][dim] 保存 · [/dim]"
         "[cyan]/load[/cyan][dim] 恢复 · [/dim]"
         "[cyan]/context[/cyan][dim] 上下文 · [/dim]"
+        "[cyan]/compact[/cyan][dim] 压缩 · [/dim]"
         "[cyan]/help[/cyan][dim] 帮助 · [/dim]"
         "[cyan]/exit[/cyan][dim] 退出[/dim]\n"
     )
@@ -257,10 +259,28 @@ def run_repl(
         if lowered == "/context":
             _print_context(agent)
             continue
+        if lowered == "/compact":
+            console.print("[dim]正在压缩对话（调用模型总结）……[/dim]")
+            try:
+                r = agent.compact()
+            except Exception as exc:  # noqa: BLE001 —— 压缩失败保持 REPL 存活
+                console.print(f"[bold red]压缩失败：[/bold red]{rich_escape(str(exc))}\n")
+                continue
+            if r["skipped"]:
+                console.print("[yellow]无需压缩：当前只有一条消息。[/yellow]\n")
+            else:
+                saved = max(0, r["before_tokens"] - r["after_tokens"])
+                console.print(
+                    f"[bold green]已压缩[/bold green]：{r['message_count_before']} 条消息 → 1 条摘要，"
+                    f"token {r['before_tokens']:,} → {r['after_tokens']:,}（省 {saved:,}）\n"
+                )
+                console.print(f"[dim]摘要：[/dim]{rich_escape(r['summary'][:200])}\n")
+            continue
         if lowered == "/help":
             console.print("[cyan]/save [路径][/cyan]  保存会话到文件")
             console.print("[cyan]/load <路径>[/cyan]  从文件恢复会话")
             console.print("[cyan]/context[/cyan]       查看上下文用量与压缩状态")
+            console.print("[cyan]/compact[/cyan]       手动压缩对话（总结成摘要释放上下文）")
             console.print("[cyan]/exit[/cyan]         退出")
             console.print()
             continue

@@ -215,3 +215,33 @@ class CodingAgent:
     def load_session(self, path: str) -> None:
         """从本地 JSON 文件恢复会话历史（覆盖当前内存中的历史）。"""
         self.history = ConversationHistory.load(path)
+
+    def compact(self) -> dict:
+        """手动压缩上下文：把当前对话总结成摘要，只保留首条用户指令。
+
+        对应 Claude Code 的 /compact——让用户主动瘦身，而非被动等四层压缩
+        （L4）兜底。摘要累积到 history.summaries，首条 user 消息（原始任务）
+        始终保留；返回摘要与压缩前后统计，供 REPL 展示。
+        """
+        messages = self.history.messages
+        before_tokens = self.history.token_count()
+        before_count = len(messages)
+        if before_count <= 1:
+            return {
+                "summary": "",
+                "before_tokens": before_tokens,
+                "after_tokens": before_tokens,
+                "message_count_before": before_count,
+                "skipped": True,
+            }
+        summary = self._summarize(messages)
+        first = messages[0] if messages[0]["role"] == "user" else None
+        self.history.messages = [first] if first is not None else []
+        self.history.summaries.append(summary)
+        return {
+            "summary": summary,
+            "before_tokens": before_tokens,
+            "after_tokens": self.history.token_count(),
+            "message_count_before": before_count,
+            "skipped": False,
+        }

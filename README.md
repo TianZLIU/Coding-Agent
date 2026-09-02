@@ -21,7 +21,7 @@ python main.py                                        # 交互式 REPL
 python main.py "用 Python 写一个冒泡排序并测试"          # 单任务模式
 python demo.py                                        # 一键演示（跑通一个完整任务）
 python -m eval.run                                    # 评测 7 个任务的成功率
-python -m unittest discover -s tests                  # 单元测试（108 个）
+python -m unittest discover -s tests                  # 单元测试（110 个）
 ```
 
 > 也可以 `pip install -e .` 安装成命令行工具，之后直接敲 `coding-agent` 进入 REPL（彩色界面、↑ 历史、tab 补全）。
@@ -93,7 +93,7 @@ eval/
 
 ## 特性亮点
 
-- **四层上下文压缩**：免费层（L3 落盘大结果 / L2 占位旧结果 / L1 裁中间）优先于调用模型的摘要，token 估算用真实 usage 动态锚定。
+- **四层上下文压缩**：免费层（L3 落盘大结果 / L2 占位旧结果 / L1 裁中间）优先于调用模型的摘要，token 估算用真实 usage 动态锚定；`/compact` 手动压缩释放上下文。
 - **长期记忆**：跨会话记住项目约定，模型可用 `memory` 工具更新。
 - **声明式技能**：常用工作流沉淀成 `.agents/skills/*/SKILL.md`，清单注入 system（省 token），正文按需 `invoke_skill` 加载。
 - **并行工具执行**：只读并行提速，含写串行保因果。
@@ -104,7 +104,7 @@ eval/
 ## 测试与评测
 
 ```bash
-python -m unittest discover -s tests   # 单元测试（108 个）
+python -m unittest discover -s tests   # 单元测试（110 个）
 python -m eval.run                    # 7 任务客观评测，输出成功率
 python -m eval.run --only 修复bug     # 只跑某个任务
 ```
