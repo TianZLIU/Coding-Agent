@@ -20,7 +20,7 @@ pip install -r requirements.txt
 python main.py                                        # 交互式 REPL
 python main.py "用 Python 写一个冒泡排序并测试"          # 单任务模式
 python demo.py                                        # 一键演示（跑通一个完整任务）
-python -m eval.run                                    # 评测 5 个任务的成功率
+python -m eval.run                                    # 评测 7 个任务的成功率
 python -m unittest discover -s tests                  # 单元测试（79 个）
 ```
 
@@ -49,7 +49,7 @@ agent/
     ├── files.py     list_dir / read_file / write_file / edit_file / glob_files / grep
     └── shell.py     run_command（本地命令执行）
 eval/
-├── tasks.py         5 个评测任务（客观判定，借鉴 SWE-bench / HumanEval）
+├── tasks.py         7 个评测任务（客观判定，借鉴 SWE-bench / HumanEval）
 └── run.py           评测运行器（成功率报告）
 ```
 
@@ -97,13 +97,13 @@ eval/
 - **声明式技能**：常用工作流沉淀成 `.agents/skills/*/SKILL.md`，清单注入 system（省 token），正文按需 `invoke_skill` 加载。
 - **并行工具执行**：只读并行提速，含写串行保因果。
 - **双层安全沙箱**：文件越界 + 危险命令双重拦截；防注入摘要（标签剥离）；会话原子落盘。
-- **可观测**：真实 token / 耗时 / ¥ 成本报告，`--verbose` 执行追踪，5 任务客观评测 + CI。
+- **可观测**：真实 token / 耗时 / ¥ 成本报告，`--verbose` 执行追踪，7 任务客观评测 + CI。
 - **交互**：彩色 CLI（rich）+ 历史 / 补全（prompt_toolkit），也提供 Streamlit 网页版。
 
 ## 测试与评测
 
 ```bash
 python -m unittest discover -s tests   # 单元测试（79 个）
-python -m eval.run                    # 5 任务客观评测，输出成功率
+python -m eval.run                    # 7 任务客观评测，输出成功率
 python -m eval.run --only 修复bug     # 只跑某个任务
 ```
