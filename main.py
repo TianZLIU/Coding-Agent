@@ -33,6 +33,7 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.markup import escape as rich_escape
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.spinner import Spinner
 from rich.table import Table
 
@@ -141,6 +142,21 @@ def _print_done(iterations: int, tool_calls: int) -> None:
     )
 
 
+def _print_summary(result: AgentResult, agent: CodingAgent) -> None:
+    """回答之后打印运行统计，用空行 + 分隔线错开，避免与回答正文混在一起。"""
+    console.print()
+    console.print(Rule(style="dim"))
+    _print_done(result.iterations, result.tool_calls)
+    if result.cost:
+        _print_cost(result.cost, agent.config.price_input_per_million, agent.config.price_output_per_million)
+    console.print()
+
+
+def _print_input_bar() -> None:
+    """输入栏顶部分隔线：把「输入任务」区域与上一轮回答明显分开。"""
+    console.print(Rule("输入任务", style="cyan"))
+
+
 def _print_context(agent: CodingAgent) -> None:
     """打印当前上下文状态：token 用量、消息构成、四层压缩触发情况、记忆/技能。"""
     stats = agent.history.context_stats()
@@ -236,9 +252,7 @@ def run_one_shot(
     agent = _build_agent(resume_path, verbose, workdir)
     console.print(f"任务：[bold]{rich_escape(task)}[/bold]\n")
     result = _stream_run(agent, task)
-    _print_done(result.iterations, result.tool_calls)
-    if result.cost:
-        _print_cost(result.cost, agent.config.price_input_per_million, agent.config.price_output_per_million)
+    _print_summary(result, agent)
     if save_path:
         agent.save_session(save_path)
         console.print(f"[dim]会话已保存到 {rich_escape(save_path)}[/dim]")
@@ -260,9 +274,14 @@ def run_repl(
         session = None
 
     while True:
+        _print_input_bar()
         try:
             if session is not None:
-                task = session.prompt([("class:prompt", "❯ ")], style=_PROMPT_STYLE).strip()
+                task = session.prompt(
+                    [("class:prompt", "❯ ")],
+                    style=_PROMPT_STYLE,
+                    bottom_toolbar="/help 帮助 · /save 保存 · /context 上下文 · /exit 退出 · Ctrl+C 退出",
+                ).strip()
             else:
                 task = input("❯ ").strip()
         except (EOFError, KeyboardInterrupt):
@@ -323,10 +342,7 @@ def run_repl(
         except Exception as exc:  # noqa: BLE001 —— 显示错误但保持 REPL 存活
             console.print(f"[bold red]运行出错：[/bold red]{rich_escape(str(exc))}\n")
             continue
-        _print_done(result.iterations, result.tool_calls)
-        if result.cost:
-            _print_cost(result.cost, agent.config.price_input_per_million, agent.config.price_output_per_million)
-        console.print()
+        _print_summary(result, agent)
 
     if save_path:
         agent.save_session(save_path)
