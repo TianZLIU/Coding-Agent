@@ -1,7 +1,11 @@
-# 依赖：
+# 核心依赖：
 # - openai：DeepSeek 官方推荐的 API 客户端库（只用于原始 HTTP 调用 + JSON 反序列化）
 # - python-dotenv：读取本地 .env 文件中的凭据（.env 已加入 .gitignore，不入库）
+# - rich：CLI 彩色输出（banner / 表格 / 状态）
+# - prompt_toolkit：REPL 命令历史与 tab 补全
 # - streamlit：网页界面（web_app.py），仅作演示外壳，核心逻辑不依赖它
 openai>=1.40.0
 python-dotenv>=1.0.0
+rich>=13.0.0
+prompt_toolkit>=3.0.0
 streamlit>=1.32.0
