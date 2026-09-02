@@ -1,8 +1,9 @@
-"""CodingAgent.compact（/compact 命令）测试：手动压缩对话为摘要，保留首条用户指令。"""
+"""CodingAgent 的 REPL 命令测试：/compact（手动压缩）与 /clear（清空对话）。"""
 from __future__ import annotations
 
 import tempfile
 import unittest
+from pathlib import Path
 
 from agent.agent import CodingAgent
 from agent.config import Config
@@ -50,6 +51,27 @@ class CompactTest(unittest.TestCase):
             self.assertTrue(r["skipped"])
             self.assertEqual(agent.history.messages, [{"role": "user", "content": "唯一任务"}])
             self.assertEqual(agent.history.summaries, [])
+
+
+class ClearTest(unittest.TestCase):
+    def test_clear_resets_conversation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = CodingAgent(Config(api_key="test-key", working_dir=tmp))
+            agent.history.add_user("任务")
+            agent.history.add_assistant_text("回答")
+            agent.history.summaries.append("旧摘要")
+            agent.clear()
+            self.assertEqual(agent.history.messages, [])
+            self.assertEqual(agent.history.summaries, [])
+
+    def test_clear_removes_offloaded_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            results_dir = Path(tmp) / ".agent_results"
+            results_dir.mkdir()
+            (results_dir / "c1.txt").write_text("x", encoding="utf-8")
+            agent = CodingAgent(Config(api_key="test-key", working_dir=tmp))
+            agent.clear()
+            self.assertFalse(any(results_dir.iterdir()))
 
 
 if __name__ == "__main__":

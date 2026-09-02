@@ -21,7 +21,7 @@ python main.py                                        # 交互式 REPL
 python main.py "用 Python 写一个冒泡排序并测试"          # 单任务模式
 python demo.py                                        # 一键演示（跑通一个完整任务）
 python -m eval.run                                    # 评测 7 个任务的成功率
-python -m unittest discover -s tests                  # 单元测试（110 个）
+python -m unittest discover -s tests                  # 单元测试（112 个）
 ```
 
 > 也可以 `pip install -e .` 安装成命令行工具，之后直接敲 `coding-agent` 进入 REPL（彩色界面、↑ 历史、tab 补全）。
@@ -104,7 +104,7 @@ eval/
 ## 测试与评测
 
 ```bash
-python -m unittest discover -s tests   # 单元测试（110 个）
+python -m unittest discover -s tests   # 单元测试（112 个）
 python -m eval.run                    # 7 任务客观评测，输出成功率
 python -m eval.run --only 修复bug     # 只跑某个任务
 ```

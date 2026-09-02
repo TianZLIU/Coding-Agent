@@ -13,6 +13,7 @@ REPL 内命令：
   /load <路径>   从文件恢复会话
   /context       查看上下文用量与四层压缩状态
   /compact       手动把当前对话总结成摘要，释放上下文
+  /clear         清空当前对话（保留长期记忆与技能）
   /help          显示帮助
   /exit          退出
 """
@@ -48,7 +49,7 @@ err_console = Console(stderr=True)
 DEFAULT_SESSION = "session.json"
 
 _REPL_COMMANDS = WordCompleter(
-    ["/save", "/load", "/context", "/compact", "/help", "/exit", "/quit"], ignore_case=True
+    ["/save", "/load", "/context", "/compact", "/clear", "/help", "/exit", "/quit"], ignore_case=True
 )
 _PROMPT_STYLE = Style.from_dict({"prompt": "bold #00c853"})
 
@@ -117,6 +118,7 @@ def _print_banner(agent: CodingAgent) -> None:
         "[cyan]/load[/cyan][dim] 恢复 · [/dim]"
         "[cyan]/context[/cyan][dim] 上下文 · [/dim]"
         "[cyan]/compact[/cyan][dim] 压缩 · [/dim]"
+        "[cyan]/clear[/cyan][dim] 清空 · [/dim]"
         "[cyan]/help[/cyan][dim] 帮助 · [/dim]"
         "[cyan]/exit[/cyan][dim] 退出[/dim]\n"
     )
@@ -276,11 +278,16 @@ def run_repl(
                 )
                 console.print(f"[dim]摘要：[/dim]{rich_escape(r['summary'][:200])}\n")
             continue
+        if lowered == "/clear":
+            agent.clear()
+            console.print("[dim]对话已清空（保留长期记忆与技能）。[/dim]\n")
+            continue
         if lowered == "/help":
             console.print("[cyan]/save [路径][/cyan]  保存会话到文件")
             console.print("[cyan]/load <路径>[/cyan]  从文件恢复会话")
             console.print("[cyan]/context[/cyan]       查看上下文用量与压缩状态")
             console.print("[cyan]/compact[/cyan]       手动压缩对话（总结成摘要释放上下文）")
+            console.print("[cyan]/clear[/cyan]         清空当前对话（保留长期记忆与技能）")
             console.print("[cyan]/exit[/cyan]         退出")
             console.print()
             continue

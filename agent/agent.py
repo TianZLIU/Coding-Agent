@@ -245,3 +245,16 @@ class CodingAgent:
             "message_count_before": before_count,
             "skipped": False,
         }
+
+    def clear(self) -> None:
+        """清空当前对话（保留 system prompt、长期记忆与技能），回到新开会话状态。
+
+        同时清掉 L3 落盘目录里的历史文件，避免 /context 里残留旧会话的落盘计数。
+        """
+        self.history.messages = []
+        self.history.summaries = []
+        results_dir = self.history.results_dir
+        if results_dir is not None and results_dir.exists():
+            for p in results_dir.iterdir():
+                if p.is_file():
+                    p.unlink(missing_ok=True)
