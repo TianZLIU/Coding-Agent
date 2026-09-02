@@ -29,8 +29,11 @@ from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.styles import Style
 from rich import box
 from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
 from rich.markup import escape as rich_escape
 from rich.panel import Panel
+from rich.spinner import Spinner
 from rich.table import Table
 
 from agent.agent import AgentResult, CodingAgent
@@ -196,27 +199,30 @@ def _print_help() -> None:
 
 
 def _stream_run(agent: CodingAgent, task: str) -> AgentResult:
-    """运行任务并流式输出最终回答。
+    """运行任务：工具调用阶段转圈，最终回答边流式生成边增量渲染 Markdown。
 
-    工具调用轮次没有文本增量，模型给出最终回答时逐字输出——这是主流 coding
-    agent 的实时反馈方式（回答通常较短，流式比「转圈等全文」更直观、更像真 agent）。
-    回答为空时兜底打印。返回 AgentResult 供上层打印统计。
+    用 rich 的 Live 同时拿到「流式实时反馈」和「Markdown 代码高亮」两件事：
+    - 工具调用轮次没有文本增量，Live 停留在 spinner（转圈 + 提示）；
+    - 模型开始输出最终回答后，文本增量实时刷新并同步重渲染成 Markdown。
+    - 非 TTY（重定向/管道）下 Live 无法原地刷新，退化为跑完后一次性打印纯文本。
     """
-    console.print("[dim]agent 工作中……[/dim]")
-    printed = False
+    if not console.is_terminal:
+        result = agent.run(task)
+        console.print(result.answer or "（模型返回了空回答）", markup=False, highlight=False)
+        return result
 
-    def on_text(delta: str) -> None:
-        nonlocal printed
-        printed = True
-        sys.stdout.write(delta)
-        sys.stdout.flush()
+    buf: list[str] = []
+    with Live(
+        Spinner("dots", text="[bold cyan]agent 工作中……[/bold cyan]"),
+        console=console,
+        refresh_per_second=12,
+    ) as live:
+        def on_text(delta: str) -> None:
+            buf.append(delta)
+            live.update(Markdown("".join(buf)))
 
-    result = agent.run(task, on_text=on_text)
-    if printed:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
-    else:
-        console.print(result.answer or "（模型返回了空回答）")
+        result = agent.run(task, on_text=on_text)
+        live.update(Markdown(result.answer or "（模型返回了空回答）"))
     return result
 
 
