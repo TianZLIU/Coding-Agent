@@ -5,9 +5,10 @@ import os
 import tempfile
 import unittest
 
+from agent.hooks import _outside_path, build_default_hooks
 from agent.tools.base import Toolbox
 from agent.tools.files import _truncate, make_file_tools
-from agent.tools.shell import _outside_path, make_shell_tool
+from agent.tools.shell import make_shell_tool
 
 
 class FileToolsTest(unittest.TestCase):
@@ -134,10 +135,13 @@ class ShellToolTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self.tool = make_shell_tool(self._tmp.name, 12000)
+        self.wd = self._tmp.name
+        self.tool = make_shell_tool(self.wd, 12000)
+        # 拦截逻辑已抽到 hook 层，测试经 Toolbox.execute 走一遍，验证沙箱在分发前生效。
+        self.box = Toolbox([self.tool], hooks=build_default_hooks(self.wd))
 
     def _call(self, args):
-        return self.tool.handler(args)
+        return self.box.execute("run_command", args)
 
     def test_runs_simple_command(self):
         out = self._call({"command": "echo hello123"})

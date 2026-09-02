@@ -21,7 +21,7 @@ python main.py                                        # 交互式 REPL
 python main.py "用 Python 写一个冒泡排序并测试"          # 单任务模式
 python demo.py                                        # 一键演示（跑通一个完整任务）
 python -m eval.run                                    # 评测 7 个任务的成功率
-python -m unittest discover -s tests                  # 单元测试（79 个）
+python -m unittest discover -s tests                  # 单元测试（104 个）
 ```
 
 > 也可以 `pip install -e .` 安装成命令行工具，之后直接敲 `coding-agent` 进入 REPL（彩色界面、↑ 历史、tab 补全）。
@@ -44,10 +44,11 @@ agent/
 ├── skills.py        声明式技能（.agents/skills/*/SKILL.md，清单注入 + 按需 invoke）
 ├── trace.py         执行追踪（--verbose）
 ├── usage.py         成本统计（真实 token + 耗时 + ¥）
+├── hooks.py         可插拔 hook 拦截层（危险命令 / 路径越界，PreToolUse）
 └── tools/
-    ├── base.py      Tool 抽象 + Toolbox 分发（含只读标记，供并行调度）
+    ├── base.py      Tool 抽象 + Toolbox（hook 拦截 + 分发 + 只读标记）
     ├── files.py     list_dir / read_file / write_file / edit_file / glob_files / grep
-    └── shell.py     run_command（本地命令执行）
+    └── shell.py     run_command（本地命令执行，纯执行器）
 eval/
 ├── tasks.py         7 个评测任务（客观判定，借鉴 SWE-bench / HumanEval）
 └── run.py           评测运行器（成功率报告）
@@ -72,7 +73,7 @@ eval/
 | 多工具调用如何执行 | 只读工具（list_dir/read_file/glob_files/grep）并行，含写工具（write/edit/run_command）串行 | 拿速度又不产生「写 A 后读 A」的竞态 |
 | 循环何时终止 | ① 模型不再请求工具（最终回答）② 达 `max_iterations` 上限 ③ 模型调用重试仍失败 | 三重兜底，防止失控死循环 |
 | 错误如何处理 | 工具异常→转成可读错误回传模型自纠；模型调用→指数退避重试 | 让 agent 具备自恢复能力 |
-| 命令/文件安全 | 双层沙箱：文件路径限制在 working_dir 内 + shell 危险命令拦截；输出截断、超时、返回退出码 | 平衡能力与可控性 |
+| 命令/文件安全 | 双层沙箱：文件路径限制 + shell 危险命令/越界拦截，抽成可插拔 hook 拦截层（PreToolUse 思想）；输出截断、超时、返回退出码 | 平衡能力与可控性 |
 | 如何跨会话记忆 | `.agent_memory.md` + `memory` 工具，注入 system prompt 前缀 | 解决「跨任务失忆」，且利于 prefix cache |
 | 为何用 openai SDK | 它是 DeepSeek 官方推荐的 API 客户端（非框架），只承担 HTTP + 反序列化 | 题目允许厂商客户端库 |
 
@@ -96,14 +97,14 @@ eval/
 - **长期记忆**：跨会话记住项目约定，模型可用 `memory` 工具更新。
 - **声明式技能**：常用工作流沉淀成 `.agents/skills/*/SKILL.md`，清单注入 system（省 token），正文按需 `invoke_skill` 加载。
 - **并行工具执行**：只读并行提速，含写串行保因果。
-- **双层安全沙箱**：文件越界 + 危险命令双重拦截；防注入摘要（标签剥离）；会话原子落盘。
+- **可插拔安全拦截层**：文件越界 + 危险命令双重拦截抽成 pre-tool hook（可组合、可单独测试）；防注入摘要（标签剥离）；会话原子落盘。
 - **可观测**：真实 token / 耗时 / ¥ 成本报告，`--verbose` 执行追踪，7 任务客观评测 + CI。
 - **交互**：彩色 CLI（rich）+ 历史 / 补全（prompt_toolkit），也提供 Streamlit 网页版。
 
 ## 测试与评测
 
 ```bash
-python -m unittest discover -s tests   # 单元测试（79 个）
+python -m unittest discover -s tests   # 单元测试（104 个）
 python -m eval.run                    # 7 任务客观评测，输出成功率
 python -m eval.run --only 修复bug     # 只跑某个任务
 ```
