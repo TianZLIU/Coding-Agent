@@ -239,6 +239,12 @@ class CodingAgent:
     def load_session(self, path: str) -> None:
         """从本地 JSON 文件恢复会话历史（覆盖当前内存中的历史）。"""
         self.history = ConversationHistory.load(path)
+        self.history.results_dir = Path(self.config.working_dir) / ".agent_results"
+
+    def restore_history(self, data: dict) -> None:
+        """从 history.to_dict() 生成的字典恢复会话（保留 L3 落盘目录）。"""
+        self.history = ConversationHistory.from_dict(data)
+        self.history.results_dir = Path(self.config.working_dir) / ".agent_results"
 
     def compact(self) -> dict:
         """手动压缩上下文：把当前对话总结成摘要，只保留首条用户指令。

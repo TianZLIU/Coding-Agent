@@ -9,8 +9,9 @@ r"""命令行入口。
   python main.py --dir D:\Agent "任务"               # 指定工作目录（默认当前目录）
 
 REPL 内命令：
-  /save [路径]   保存会话（缺省用 --save 指定的路径或 session.json）
-  /load <路径>   从文件恢复会话
+  /save [路径]   保存会话（无路径则存入会话库）
+  /sessions      列出已保存的会话
+  /load <名称或路径>  恢复会话（优先按会话名，否则按文件路径）
   /context       查看上下文用量与四层压缩状态
   /compact       手动把当前对话总结成摘要，释放上下文
   /clear         清空当前对话（保留长期记忆与技能）
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -39,6 +41,7 @@ from rich.table import Table
 
 from agent.agent import AgentResult, CodingAgent
 from agent.config import Config
+from agent.sessions import SessionStore
 from agent.usage import CostStats
 
 # Windows 控制台默认 GBK，打印含 emoji 的模型回答会崩溃；
@@ -50,10 +53,8 @@ for _stream in (sys.stdout, sys.stderr):
 console = Console()
 err_console = Console(stderr=True)
 
-DEFAULT_SESSION = "session.json"
-
 _REPL_COMMANDS = WordCompleter(
-    ["/save", "/load", "/context", "/compact", "/clear", "/help", "/exit", "/quit"], ignore_case=True
+    ["/save", "/load", "/sessions", "/context", "/compact", "/clear", "/help", "/exit", "/quit"], ignore_case=True
 )
 _PROMPT_STYLE = Style.from_dict({"prompt": "bold #00c853"})
 
@@ -110,6 +111,7 @@ def _print_banner(agent: CodingAgent) -> None:
     console.print(
         "[dim]输入任务后回车开始；[/dim]"
         "[cyan]/save[/cyan][dim] 保存 · [/dim]"
+        "[cyan]/sessions[/cyan][dim] 会话 · [/dim]"
         "[cyan]/load[/cyan][dim] 恢复 · [/dim]"
         "[cyan]/context[/cyan][dim] 上下文 · [/dim]"
         "[cyan]/compact[/cyan][dim] 压缩 · [/dim]"
@@ -204,14 +206,66 @@ def _print_help() -> None:
     table = Table(box=box.SIMPLE_HEAVY, title="REPL 命令", border_style="cyan", show_header=False)
     table.add_column(style="cyan bold", no_wrap=True)
     table.add_column(style="dim")
-    table.add_row("/save [路径]", "保存会话到文件")
-    table.add_row("/load <路径>", "从文件恢复会话")
+    table.add_row("/save [路径]", "保存会话（无路径则存入会话库）")
+    table.add_row("/sessions", "列出已保存的会话")
+    table.add_row("/load <名称或路径>", "恢复会话（优先按会话名，否则按文件路径）")
     table.add_row("/context", "查看上下文用量与四层压缩状态")
     table.add_row("/compact", "手动压缩对话（总结成摘要释放上下文）")
     table.add_row("/clear", "清空当前对话（保留长期记忆与技能）")
     table.add_row("/exit", "退出")
     console.print(table)
     console.print()
+
+
+def _fmt_time(ts: float) -> str:
+    return datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
+
+
+def _display_messages(agent: CodingAgent) -> list[dict]:
+    """从完整历史里抽出 user/assistant 文本消息，用于展示与取标题。"""
+    out: list[dict] = []
+    for m in agent.history.messages:
+        if m["role"] == "user":
+            out.append({"role": "user", "content": m.get("content", "")})
+        elif m["role"] == "assistant" and m.get("content"):
+            out.append({"role": "assistant", "content": m.get("content")})
+    return out
+
+
+def _print_sessions(store: SessionStore) -> None:
+    items = store.list()
+    if not items:
+        console.print("[dim]暂无保存的会话。用 /save 保存，或网页版会自动保存。[/dim]\n")
+        return
+    table = Table(box=box.SIMPLE_HEAVY, title="已保存的会话", border_style="cyan")
+    table.add_column("名称", style="cyan", no_wrap=True)
+    table.add_column("标题", style="bold")
+    table.add_column("消息", justify="right", style="dim")
+    table.add_column("更新时间", style="dim")
+    for it in items:
+        table.add_row(it["name"], it["title"], str(it["message_count"]), _fmt_time(it["updated_at"]))
+    console.print(table)
+    console.print("[dim]/load <名称> 恢复会话[/dim]\n")
+
+
+def _resolve_store_session(store: SessionStore, arg: str) -> str | None:
+    """把 /load 的参数解析成存储里的会话名：精确名称 → 标题包含 → 名称前缀。"""
+    items = store.list()
+    for it in items:
+        if it["name"] == arg:
+            return it["name"]
+    by_title = [it["name"] for it in items if arg in it["title"]]
+    if len(by_title) == 1:
+        return by_title[0]
+    by_prefix = [it["name"] for it in items if it["name"].startswith(arg)]
+    if len(by_prefix) == 1:
+        return by_prefix[0]
+    return None
+
+
+def _load_from_store(agent: CodingAgent, store: SessionStore, name: str) -> None:
+    data = store.load(name)
+    agent.restore_history(data.get("history") or {})
 
 
 def _stream_run(agent: CodingAgent, task: str) -> AgentResult:
@@ -265,6 +319,7 @@ def run_repl(
     workdir: str | None = None,
 ) -> None:
     agent = _build_agent(resume_path, verbose, workdir)
+    store = SessionStore()
     _print_banner(agent)
     # prompt_toolkit 需要真正的 Windows 控制台；在 Git Bash/mintty 等伪终端里拿不到
     # 屏幕缓冲区，这里退化为标准 input()（无历史/补全，但功能完整）。
@@ -294,20 +349,38 @@ def run_repl(
         if lowered in {"/exit", "/quit"}:
             break
         if lowered.startswith("/save"):
-            path = task[len("/save"):].strip() or save_path or DEFAULT_SESSION
-            agent.save_session(path)
-            console.print(f"[dim]会话已保存到 {rich_escape(path)}[/dim]\n")
+            arg = task[len("/save"):].strip()
+            if arg:
+                agent.save_session(arg)
+                console.print(f"[dim]会话已保存到 {rich_escape(arg)}[/dim]\n")
+            elif save_path:
+                agent.save_session(save_path)
+                console.print(f"[dim]会话已保存到 {rich_escape(save_path)}[/dim]\n")
+            else:
+                name = store.new_name()
+                store.save(name, _display_messages(agent), agent.history.to_dict())
+                console.print(f"[dim]会话已保存（名称 {name}），/sessions 查看，/load {name} 恢复[/dim]\n")
             continue
         if lowered.startswith("/load"):
-            path = task[len("/load"):].strip()
-            if not path:
-                console.print("[yellow]用法：/load <路径>[/yellow]")
+            arg = task[len("/load"):].strip()
+            if not arg:
+                _print_sessions(store)
                 continue
-            try:
-                agent.load_session(path)
-                console.print(f"[dim]已从 {rich_escape(path)} 恢复会话[/dim]\n")
-            except (FileNotFoundError, ValueError):
-                console.print(f"[yellow]警告：会话文件 {rich_escape(path)} 不存在或格式错误[/yellow]\n")
+            name = _resolve_store_session(store, arg)
+            if name:
+                _load_from_store(agent, store, name)
+                console.print(f"[dim]已恢复会话「{rich_escape(name)}」[/dim]\n")
+            else:
+                try:
+                    agent.load_session(arg)
+                    console.print(f"[dim]已从 {rich_escape(arg)} 恢复会话[/dim]\n")
+                except (FileNotFoundError, ValueError):
+                    console.print(
+                        f"[yellow]警告：未找到会话或文件 {rich_escape(arg)}，用 /sessions 查看已保存会话[/yellow]\n"
+                    )
+            continue
+        if lowered == "/sessions":
+            _print_sessions(store)
             continue
         if lowered == "/context":
             _print_context(agent)

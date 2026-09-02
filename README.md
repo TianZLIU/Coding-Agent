@@ -21,7 +21,7 @@ python main.py                                        # 交互式 REPL
 python main.py "用 Python 写一个冒泡排序并测试"          # 单任务模式
 python demo.py                                        # 一键演示（跑通一个完整任务）
 python -m eval.run                                    # 评测 7 个任务的成功率
-python -m unittest discover -s tests                  # 单元测试（114 个）
+python -m unittest discover -s tests                  # 单元测试（120 个）
 ```
 
 > 也可以 `pip install -e .` 安装成命令行工具，之后直接敲 `coding-agent` 进入 REPL（彩色界面、↑ 历史、tab 补全）。
@@ -45,6 +45,7 @@ agent/
 ├── trace.py         执行追踪（--verbose）
 ├── usage.py         成本统计（真实 token + 耗时 + ¥）
 ├── hooks.py         可插拔 hook 拦截层（危险命令 / 路径越界，PreToolUse）
+├── sessions.py      会话管理（.sessions/ 多会话，CLI 与网页共用）
 └── tools/
     ├── base.py      Tool 抽象 + Toolbox（hook 拦截 + 分发 + 只读标记）
     ├── files.py     list_dir / read_file / write_file / edit_file / glob_files / grep
@@ -100,13 +101,14 @@ eval/
 - **并行工具执行**：只读并行提速，含写串行保因果。
 - **可插拔安全拦截层**：文件越界 + 危险命令双重拦截抽成 pre-tool hook（可组合、可单独测试）；防注入摘要（标签剥离）；会话原子落盘。
 - **防失控双保险**：`max_iterations` 硬上限 + 重复调用护栏（连续同一工具同一参数达 3 次即注入提示打断重试死循环）。
+- **多会话管理**：会话存入 `.sessions/`，CLI 用 `/sessions` 列出 + `/load` 恢复，网页版侧边栏切换/新开/删除，两端共用。
 - **可观测**：真实 token / 耗时 / ¥ 成本报告，`--verbose` 执行追踪，`/context` 查看上下文用量与四层压缩状态，7 任务客观评测 + CI。
 - **交互**：彩色 CLI（rich）+ 历史 / 补全（prompt_toolkit），也提供 Streamlit 网页版。
 
 ## 测试与评测
 
 ```bash
-python -m unittest discover -s tests   # 单元测试（114 个）
+python -m unittest discover -s tests   # 单元测试（120 个）
 python -m eval.run                    # 7 任务客观评测，输出成功率
 python -m eval.run --only 修复bug     # 只跑某个任务
 ```

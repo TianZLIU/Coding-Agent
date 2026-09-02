@@ -4,80 +4,77 @@
 - 聊天区：st.chat_input 提问，st.write_stream 流式展示模型回答
 - 过程区：每条回答下方用 st.expander 展示本次的工具调用
 - 连续对话：agent 与消息历史存于 session_state，跨提交保留
-- 持久化：对话历史写入 .web_session.json，刷新/重开浏览器后自动恢复
+- 会话管理：侧边栏可切换 / 新开 / 删除会话，刷新自动恢复最近会话
+  （会话存于 .sessions/，与 CLI 共用）
 
 核心逻辑零改动，本文件只是「壳」。
 """
 from __future__ import annotations
 
-import json
 import queue
 import threading
-from pathlib import Path
 
 import streamlit as st
 
 from agent.agent import CodingAgent
 from agent.config import Config
-from agent.history import ConversationHistory
+from agent.sessions import SessionStore
 from agent.usage import format_cost_report
 
 st.set_page_config(page_title="编程智能体", page_icon="🤖", layout="wide")
 
-SESSION_FILE = Path(__file__).resolve().parent / ".web_session.json"
-
 config = Config()
+store = SessionStore()
 
-with st.sidebar:
-    st.markdown("**运行环境**")
-    st.write(f"模型：`{config.model}`")
-    st.write(f"工作目录：`{config.working_dir}`")
-    if st.button("🗑️ 新开对话", use_container_width=True):
-        st.session_state.pop("agent", None)
-        st.session_state.pop("messages", None)
-        SESSION_FILE.unlink(missing_ok=True)
-        st.rerun()
 
-# 初始化 agent 与历史（优先从磁盘恢复，实现刷新后对话不丢）
+def _start_fresh() -> None:
+    """清空当前会话（保留长期记忆与技能），回到新会话状态。"""
+    agent = st.session_state.agent
+    agent.clear()
+    st.session_state.messages = []
+    st.session_state.current_session = None
+
+
+def _load_session(name: str) -> None:
+    """从存储恢复一个会话到 agent 与显示历史。"""
+    data = store.load(name)
+    agent = st.session_state.agent
+    agent.restore_history(data.get("history") or {})
+    st.session_state.messages = data.get("messages", [])
+    st.session_state.current_session = name
+
+
+def _save_current() -> None:
+    """把当前会话写入存储（无名字则自动命名）。"""
+    agent = st.session_state.agent
+    messages = st.session_state.messages
+    if not messages:
+        return
+    name = st.session_state.get("current_session")
+    if not name:
+        name = store.new_name()
+        st.session_state.current_session = name
+    store.save(name, messages, agent.history.to_dict())
+
+
+# 初始化 agent 与历史（优先恢复最近一次会话，实现刷新后对话不丢）
 if "agent" not in st.session_state:
     try:
         config.validate()
     except RuntimeError as exc:
         st.error(f"配置错误：{exc}")
         st.stop()
-    agent = CodingAgent(config)
-    messages: list[dict] = []
-    if SESSION_FILE.exists():
-        try:
-            data = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
-            messages = data.get("messages", [])
-            hist = data.get("history")
-            if hist:
-                agent.history = ConversationHistory.from_dict(hist)
-        except Exception:  # noqa: BLE001 —— 损坏则当作全新会话
-            messages = []
-    st.session_state.agent = agent
-    st.session_state.messages = messages
-
-agent: CodingAgent = st.session_state.agent
-
-
-def _save_session() -> None:
-    """把消息历史与 agent 上下文写入本地文件，供刷新后恢复。"""
-    SESSION_FILE.write_text(
-        json.dumps(
-            {
-                "messages": st.session_state.messages,
-                "history": agent.history.to_dict(),
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+    st.session_state.agent = CodingAgent(config)
+    st.session_state.messages = []
+    st.session_state.current_session = None
+    sessions = store.list()
+    if sessions:
+        _load_session(sessions[0]["name"])
 
 
 def _run_task(prompt: str) -> None:
     """渲染一次提问、运行 agent、流式展示，最后持久化。"""
+    agent = st.session_state.agent
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -151,7 +148,43 @@ def _run_task(prompt: str) -> None:
                 if tool_log:
                     st.markdown("\n".join(tool_log))
 
-    _save_session()
+    _save_current()
+
+
+# —— 侧边栏：运行环境 + 会话管理 ——
+with st.sidebar:
+    st.markdown("**运行环境**")
+    st.write(f"模型：`{config.model}`")
+    st.write(f"工作目录：`{config.working_dir}`")
+    st.divider()
+
+    st.markdown("**会话**")
+    sessions = store.list()
+    names = [s["name"] for s in sessions]
+    titles = {s["name"]: s["title"] for s in sessions}
+
+    current = st.session_state.get("current_session")
+    cur_key = current if current in names else "__new__"
+    options = ["__new__"] + names
+    labels = {"__new__": "＋ 新会话", **titles}
+
+    chosen = st.selectbox(
+        "切换会话",
+        options,
+        index=options.index(cur_key),
+        format_func=lambda n: labels.get(n, n),
+    )
+    if chosen != cur_key:
+        if chosen == "__new__":
+            _start_fresh()
+        else:
+            _load_session(chosen)
+        st.rerun()
+
+    if current in names and st.button("🗑️ 删除当前会话", use_container_width=True):
+        store.delete(current)
+        _start_fresh()
+        st.rerun()
 
 
 st.title("🤖 编程智能体")
