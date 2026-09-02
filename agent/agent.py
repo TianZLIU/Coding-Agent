@@ -60,6 +60,19 @@ SUMMARY_PROMPT = """你是对话压缩助手。请把下面这段「agent 与工
 ## Next Steps
 """
 
+# 重复调用护栏：模型连续多次用同一工具同一参数时，注入提示打断「重试死循环」。
+# 这是对 max_iterations（硬上限）的补充——在模型陷入重复之前就点醒它。
+REPEAT_GUARD_THRESHOLD = 3
+
+
+def _repeat_hint(name: str, count: int) -> str:
+    """重复调用护栏的提示文本，前置到该次工具结果之前。"""
+    return (
+        f"[重复调用护栏] 你已连续 {count} 次用相同参数调用 {name}，结果不会改变。"
+        f"请停止重试相同操作：先 read_file 重新确认文件当前内容与精确行号，"
+        f"或直接总结当前进展、结束任务。\n\n"
+    )
+
 
 class AgentResult:
     def __init__(self, answer: str, iterations: int, tool_calls: int, cost=None):
@@ -166,6 +179,8 @@ class CodingAgent:
         """
         self.history.add_user(task)
         total_tool_calls = 0
+        last_call: tuple[str, str] | None = None  # 上一次工具调用的 (name, arguments)
+        repeat_count = 0
 
         for iteration in range(1, self.config.max_iterations + 1):
             messages = self.history.build(summarizer=self._summarize)
@@ -188,6 +203,15 @@ class CodingAgent:
                 outcomes = self._execute_tools(response.tool_calls)
                 for tc, (result, elapsed) in zip(response.tool_calls, outcomes):
                     total_tool_calls += 1
+                    # 重复调用护栏：连续多次同一工具同一参数 → 在结果前注入提示
+                    key = (tc["name"], tc["arguments"])
+                    if key == last_call:
+                        repeat_count += 1
+                    else:
+                        last_call = key
+                        repeat_count = 1
+                    if repeat_count >= REPEAT_GUARD_THRESHOLD:
+                        result = _repeat_hint(tc["name"], repeat_count) + result
                     self.history.add_tool_result(tc["id"], tc["name"], result)
                     self.llm.cost.tool_seconds += elapsed
                     self.tracer.tool_done(tc["name"], elapsed, result)

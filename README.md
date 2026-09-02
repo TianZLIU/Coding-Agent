@@ -21,7 +21,7 @@ python main.py                                        # 交互式 REPL
 python main.py "用 Python 写一个冒泡排序并测试"          # 单任务模式
 python demo.py                                        # 一键演示（跑通一个完整任务）
 python -m eval.run                                    # 评测 7 个任务的成功率
-python -m unittest discover -s tests                  # 单元测试（112 个）
+python -m unittest discover -s tests                  # 单元测试（114 个）
 ```
 
 > 也可以 `pip install -e .` 安装成命令行工具，之后直接敲 `coding-agent` 进入 REPL（彩色界面、↑ 历史、tab 补全）。
@@ -72,6 +72,7 @@ eval/
 | 上下文如何管理 | 四层 cheap-first 管线：L3 大结果落盘 → L2 旧结果占位 → L1 裁中间 → L4 摘要兜底；免费层优先于 lossy 摘要 | 能不花 API 钱省 token 的，就不花 |
 | 多工具调用如何执行 | 只读工具（list_dir/read_file/glob_files/grep）并行，含写工具（write/edit/run_command）串行 | 拿速度又不产生「写 A 后读 A」的竞态 |
 | 循环何时终止 | ① 模型不再请求工具（最终回答）② 达 `max_iterations` 上限 ③ 模型调用重试仍失败 | 三重兜底，防止失控死循环 |
+| 模型陷入重复重试 | 连续同一工具同一参数达 3 次 → 在工具结果前注入提示（重复调用护栏），配合 `max_iterations` 双保险 | 在硬上限触发前就点醒模型，减少无谓 API 重试 |
 | 错误如何处理 | 工具异常→转成可读错误回传模型自纠；模型调用→指数退避重试 | 让 agent 具备自恢复能力 |
 | 命令/文件安全 | 双层沙箱：文件路径限制 + shell 危险命令/越界拦截，抽成可插拔 hook 拦截层（PreToolUse 思想）；输出截断、超时、返回退出码 | 平衡能力与可控性 |
 | 如何跨会话记忆 | `.agent_memory.md` + `memory` 工具，注入 system prompt 前缀 | 解决「跨任务失忆」，且利于 prefix cache |
@@ -98,13 +99,14 @@ eval/
 - **声明式技能**：常用工作流沉淀成 `.agents/skills/*/SKILL.md`，清单注入 system（省 token），正文按需 `invoke_skill` 加载。
 - **并行工具执行**：只读并行提速，含写串行保因果。
 - **可插拔安全拦截层**：文件越界 + 危险命令双重拦截抽成 pre-tool hook（可组合、可单独测试）；防注入摘要（标签剥离）；会话原子落盘。
+- **防失控双保险**：`max_iterations` 硬上限 + 重复调用护栏（连续同一工具同一参数达 3 次即注入提示打断重试死循环）。
 - **可观测**：真实 token / 耗时 / ¥ 成本报告，`--verbose` 执行追踪，`/context` 查看上下文用量与四层压缩状态，7 任务客观评测 + CI。
 - **交互**：彩色 CLI（rich）+ 历史 / 补全（prompt_toolkit），也提供 Streamlit 网页版。
 
 ## 测试与评测
 
 ```bash
-python -m unittest discover -s tests   # 单元测试（112 个）
+python -m unittest discover -s tests   # 单元测试（114 个）
 python -m eval.run                    # 7 任务客观评测，输出成功率
 python -m eval.run --only 修复bug     # 只跑某个任务
 ```
