@@ -33,7 +33,7 @@ from rich.markup import escape as rich_escape
 from rich.panel import Panel
 from rich.table import Table
 
-from agent.agent import CodingAgent
+from agent.agent import AgentResult, CodingAgent
 from agent.config import Config
 from agent.usage import CostStats
 
@@ -62,23 +62,6 @@ def _make_history():
         return InMemoryHistory()
 
 
-class _StreamPrinter:
-    """流式打印：逐字输出模型文本，结束时补一个换行。"""
-
-    def __init__(self) -> None:
-        self.printed_any = False
-
-    def emit(self, delta: str) -> None:
-        sys.stdout.write(delta)
-        sys.stdout.flush()
-        self.printed_any = True
-
-    def finish(self) -> None:
-        if self.printed_any:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-
-
 def _build_agent(
     resume_path: str | None = None, verbose: bool = False, workdir: str | None = None
 ) -> CodingAgent:
@@ -103,11 +86,19 @@ def _build_agent(
 
 
 def _print_banner(agent: CodingAgent) -> None:
+    mem = agent.memory.load()
+    skills = agent.skills.names()
+    meta = (
+        f"[dim]模型[/dim] [green]{agent.config.model}[/green]"
+        f"  ·  [dim]工作目录[/dim] [cyan]{agent.config.working_dir}[/cyan]"
+    )
+    if mem:
+        meta += f"  ·  [dim]长期记忆[/dim] {len(mem)} 字符"
+    if skills:
+        meta += f"  ·  [dim]技能[/dim] {len(skills)} 个"
     console.print(
         Panel(
-            f"[bold cyan]coding-agent[/bold cyan]  模型 [green]{agent.config.model}[/green]\n"
-            f"工作目录 [dim]{agent.config.working_dir}[/dim]",
-            title="编程智能体",
+            f"[bold cyan]coding-agent[/bold cyan]  [dim]DeepSeek 驱动的编程智能体[/dim]\n{meta}",
             border_style="cyan",
             box=box.ROUNDED,
         )
@@ -142,7 +133,9 @@ def _print_cost(cost: CostStats, price_in: float, price_out: float) -> None:
 
 
 def _print_done(iterations: int, tool_calls: int) -> None:
-    console.print(f"[bold green]完成[/bold green]：{iterations} 轮，[cyan]{tool_calls}[/cyan] 次工具调用")
+    console.print(
+        f"[bold green]✓ 完成[/bold green]  [dim]{iterations} 轮 · [/dim][cyan]{tool_calls}[/cyan][dim] 次工具调用[/dim]"
+    )
 
 
 def _print_context(agent: CodingAgent) -> None:
@@ -188,6 +181,45 @@ def _print_context(agent: CodingAgent) -> None:
     )
 
 
+def _print_help() -> None:
+    table = Table(box=box.SIMPLE_HEAVY, title="REPL 命令", border_style="cyan", show_header=False)
+    table.add_column(style="cyan bold", no_wrap=True)
+    table.add_column(style="dim")
+    table.add_row("/save [路径]", "保存会话到文件")
+    table.add_row("/load <路径>", "从文件恢复会话")
+    table.add_row("/context", "查看上下文用量与四层压缩状态")
+    table.add_row("/compact", "手动压缩对话（总结成摘要释放上下文）")
+    table.add_row("/clear", "清空当前对话（保留长期记忆与技能）")
+    table.add_row("/exit", "退出")
+    console.print(table)
+    console.print()
+
+
+def _stream_run(agent: CodingAgent, task: str) -> AgentResult:
+    """运行任务并流式输出最终回答。
+
+    工具调用轮次没有文本增量，模型给出最终回答时逐字输出——这是主流 coding
+    agent 的实时反馈方式（回答通常较短，流式比「转圈等全文」更直观、更像真 agent）。
+    回答为空时兜底打印。返回 AgentResult 供上层打印统计。
+    """
+    console.print("[dim]agent 工作中……[/dim]")
+    printed = False
+
+    def on_text(delta: str) -> None:
+        nonlocal printed
+        printed = True
+        sys.stdout.write(delta)
+        sys.stdout.flush()
+
+    result = agent.run(task, on_text=on_text)
+    if printed:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    else:
+        console.print(result.answer or "（模型返回了空回答）")
+    return result
+
+
 def run_one_shot(
     task: str,
     save_path: str | None = None,
@@ -197,13 +229,7 @@ def run_one_shot(
 ) -> None:
     agent = _build_agent(resume_path, verbose, workdir)
     console.print(f"任务：[bold]{rich_escape(task)}[/bold]\n")
-    console.print("[dim]agent 工作中……[/dim]\n")
-    printer = _StreamPrinter()
-    result = agent.run(task, on_text=printer.emit)
-    if printer.printed_any:
-        printer.finish()
-    else:
-        console.print(result.answer, markup=False, highlight=False)
+    result = _stream_run(agent, task)
     _print_done(result.iterations, result.tool_calls)
     if result.cost:
         _print_cost(result.cost, agent.config.price_input_per_million, agent.config.price_output_per_million)
@@ -230,9 +256,9 @@ def run_repl(
     while True:
         try:
             if session is not None:
-                task = session.prompt([("class:prompt", "> ")], style=_PROMPT_STYLE).strip()
+                task = session.prompt([("class:prompt", "❯ ")], style=_PROMPT_STYLE).strip()
             else:
-                task = input("> ").strip()
+                task = input("❯ ").strip()
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
@@ -283,26 +309,14 @@ def run_repl(
             console.print("[dim]对话已清空（保留长期记忆与技能）。[/dim]\n")
             continue
         if lowered == "/help":
-            console.print("[cyan]/save [路径][/cyan]  保存会话到文件")
-            console.print("[cyan]/load <路径>[/cyan]  从文件恢复会话")
-            console.print("[cyan]/context[/cyan]       查看上下文用量与压缩状态")
-            console.print("[cyan]/compact[/cyan]       手动压缩对话（总结成摘要释放上下文）")
-            console.print("[cyan]/clear[/cyan]         清空当前对话（保留长期记忆与技能）")
-            console.print("[cyan]/exit[/cyan]         退出")
-            console.print()
+            _print_help()
             continue
 
-        console.print("[dim]agent 工作中……[/dim]\n")
-        printer = _StreamPrinter()
         try:
-            result = agent.run(task, on_text=printer.emit)
+            result = _stream_run(agent, task)
         except Exception as exc:  # noqa: BLE001 —— 显示错误但保持 REPL 存活
             console.print(f"[bold red]运行出错：[/bold red]{rich_escape(str(exc))}\n")
             continue
-        if printer.printed_any:
-            printer.finish()
-        else:
-            console.print(result.answer, markup=False, highlight=False)
         _print_done(result.iterations, result.tool_calls)
         if result.cost:
             _print_cost(result.cost, agent.config.price_input_per_million, agent.config.price_output_per_million)
