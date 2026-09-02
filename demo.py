@@ -22,6 +22,11 @@ from agent.config import Config
 from agent.usage import format_cost_report
 from eval.tasks import TASKS
 
+# Windows 控制台默认 GBK，流式输出含 emoji 的回答会崩溃；重配为 UTF-8。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 console = Console()
 err = Console(stderr=True)
 

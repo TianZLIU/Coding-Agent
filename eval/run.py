@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -14,6 +15,12 @@ from pathlib import Path
 from agent.agent import CodingAgent
 from agent.config import Config
 from eval.tasks import TASKS
+
+# Windows 控制台默认 GBK，打印含 emoji 的评测结果（✅/❌）会崩溃；
+# 这里把标准输出重配为 UTF-8（无法编码的字符用 ? 代替，绝不抛异常）。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def run_task(task) -> dict:
