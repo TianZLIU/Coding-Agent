@@ -6,6 +6,7 @@
   python main.py --save session.json ...            # 结束后保存会话
   python main.py --resume session.json ...          # 启动时恢复会话（跨进程续聊）
   python main.py --verbose "任务"                    # 打印执行追踪（token/工具/耗时）
+  python main.py --dir D:\Agent "任务"               # 指定工作目录（默认当前目录）
 
 REPL 内命令：
   /save [路径]   保存会话（缺省用 --save 指定的路径或 session.json）
@@ -75,8 +76,12 @@ class _StreamPrinter:
             sys.stdout.flush()
 
 
-def _build_agent(resume_path: str | None = None, verbose: bool = False) -> CodingAgent:
+def _build_agent(
+    resume_path: str | None = None, verbose: bool = False, workdir: str | None = None
+) -> CodingAgent:
     config = Config()
+    if workdir:
+        config.working_dir = str(Path(workdir).resolve())
     try:
         config.validate()
     except RuntimeError as exc:
@@ -134,8 +139,14 @@ def _print_done(iterations: int, tool_calls: int) -> None:
     console.print(f"[bold green]完成[/bold green]：{iterations} 轮，[cyan]{tool_calls}[/cyan] 次工具调用")
 
 
-def run_one_shot(task: str, save_path: str | None = None, resume_path: str | None = None, verbose: bool = False) -> None:
-    agent = _build_agent(resume_path, verbose)
+def run_one_shot(
+    task: str,
+    save_path: str | None = None,
+    resume_path: str | None = None,
+    verbose: bool = False,
+    workdir: str | None = None,
+) -> None:
+    agent = _build_agent(resume_path, verbose, workdir)
     console.print(f"任务：[bold]{rich_escape(task)}[/bold]\n")
     console.print("[dim]agent 工作中……[/dim]\n")
     printer = _StreamPrinter()
@@ -152,8 +163,13 @@ def run_one_shot(task: str, save_path: str | None = None, resume_path: str | Non
         console.print(f"[dim]会话已保存到 {rich_escape(save_path)}[/dim]")
 
 
-def run_repl(save_path: str | None = None, resume_path: str | None = None, verbose: bool = False) -> None:
-    agent = _build_agent(resume_path, verbose)
+def run_repl(
+    save_path: str | None = None,
+    resume_path: str | None = None,
+    verbose: bool = False,
+    workdir: str | None = None,
+) -> None:
+    agent = _build_agent(resume_path, verbose, workdir)
     _print_banner(agent)
     # prompt_toolkit 需要真正的 Windows 控制台；在 Git Bash/mintty 等伪终端里拿不到
     # 屏幕缓冲区，这里退化为标准 input()（无历史/补全，但功能完整）。
@@ -227,6 +243,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--save", metavar="PATH", help="运行结束后将会话历史保存到指定文件")
     parser.add_argument("--resume", metavar="PATH", help="启动时从指定文件恢复会话历史（跨进程续聊）")
     parser.add_argument("--verbose", action="store_true", help="打印执行追踪（每轮 token、工具调用与耗时）")
+    parser.add_argument(
+        "--dir",
+        metavar="PATH",
+        help="指定工作目录（默认当前目录）。agent 的文件/命令访问被限制在此目录内，"
+        "要操作 D:\\Agent 里的文件就把工作目录设成 D:\\Agent",
+    )
     return parser.parse_args()
 
 
@@ -234,9 +256,15 @@ def main() -> None:
     """CLI 入口（供 console_scripts 调用）。"""
     args = _parse_args()
     if args.task:
-        run_one_shot(" ".join(args.task), save_path=args.save, resume_path=args.resume, verbose=args.verbose)
+        run_one_shot(
+            " ".join(args.task),
+            save_path=args.save,
+            resume_path=args.resume,
+            verbose=args.verbose,
+            workdir=args.dir,
+        )
     else:
-        run_repl(save_path=args.save, resume_path=args.resume, verbose=args.verbose)
+        run_repl(save_path=args.save, resume_path=args.resume, verbose=args.verbose, workdir=args.dir)
 
 
 if __name__ == "__main__":

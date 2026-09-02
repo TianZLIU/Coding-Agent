@@ -26,6 +26,8 @@ python -m unittest discover -s tests                  # 单元测试（79 个）
 
 > 也可以 `pip install -e .` 安装成命令行工具，之后直接敲 `coding-agent` 进入 REPL（彩色界面、↑ 历史、tab 补全）。
 
+> agent 默认在「启动它的目录」里工作（文件/命令访问都被沙箱限制在这个目录内）。要操作别的目录（比如 `D:\Agent`），用 `python main.py --dir D:\Agent`，或在 `.env` 里设 `WORKING_DIR=D:\Agent`。
+
 ## 架构
 
 ```

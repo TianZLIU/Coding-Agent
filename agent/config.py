@@ -34,7 +34,7 @@ class Config:
     max_output_chars: int = 12000     # 单次工具输出最大字符数，超出截断
 
     # —— 运行环境 ——
-    working_dir: str = field(default_factory=lambda: str(Path.cwd()))
+    working_dir: str = field(default_factory=lambda: os.getenv("WORKING_DIR") or str(Path.cwd()))
 
     def validate(self) -> None:
         """启动前校验：必须能拿到 API key。"""
