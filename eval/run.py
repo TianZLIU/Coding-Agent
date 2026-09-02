@@ -16,8 +16,12 @@ from agent.config import Config
 from eval.tasks import TASKS
 
 
-def run_task(task, max_seconds: int = 240) -> dict:
-    """在隔离目录里跑一个任务，返回通过与否 + 耗时 + agent 最终输出。"""
+def run_task(task) -> dict:
+    """在隔离目录里跑一个任务，返回通过与否 + 耗时 + agent 最终输出。
+
+    整体不设硬性超时，靠 agent 自身的三重边界兜底：单条命令 60s 超时（shell.py）、
+    单轮模型调用 3 次指数退避（llm.py）、以及 max_iterations（默认 30 轮）。
+    """
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
         task.setup(workdir)

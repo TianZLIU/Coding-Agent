@@ -92,6 +92,8 @@ def make_file_tools(working_dir: str, max_output_chars: int) -> list[Tool]:
             return f"错误：文件不存在：{path}"
         content = path.read_text(encoding="utf-8", errors="replace")
         old = args["old_string"]
+        if not old:
+            return "错误：old_string 不能为空，请提供要替换的原文片段。"
         new = args.get("new_string", "")
         count = content.count(old)
         if count == 0:
@@ -187,7 +189,7 @@ def make_file_tools(working_dir: str, max_output_chars: int) -> list[Tool]:
         ),
         Tool(
             name="edit_file",
-            description="在文件中把一段唯一的旧文本精确替换为新文本（替换第一次出现）。",
+            description="在文件中把唯一出现的一段旧文本精确替换为新文本（出现多次会报错，请先 read_file 确认原文后再替换）。",
             parameters={
                 "path": {"type": "string", "description": "文件路径"},
                 "old_string": {"type": "string", "description": "要替换的原文（必须唯一）"},

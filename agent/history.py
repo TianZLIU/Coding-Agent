@@ -235,6 +235,11 @@ class ConversationHistory:
     def _summarize_oldest_round(self, summarizer) -> bool:
         """总结并删除最早的完整轮次（从第二条 user 开始）。返回是否真删了一轮。
 
+        注意：轮次以「user 消息」为界，因此只在 REPL 多轮对话（用户连续输入
+        多条）时触发；单任务（demo / eval / 单任务模式）只有 messages[0] 一条
+        user，找不到第二条 user 会返回 False——那种场景的预算由 L3/L2/L1 免费层
+        兜底，通常不会超预算。
+
         提供 summarizer 时先「总结再裁剪」以保留关键信息；总结失败则退回
         「直接丢弃」。摘要累积到独立列表，messages 只删不插，保证循环必然终止。
         """
